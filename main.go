@@ -16,16 +16,17 @@ import (
 	"unsafe"
 )
 
-var version = "1.1.0" // overridden at build time with -ldflags "-X main.version=..."
+var version = "1.2.0" // overridden at build time with -ldflags "-X main.version=..."
 
 // repoURL is set at build time by the GitHub workflow to this repository's page.
 var repoURL = "https://github.com/konohafiles/download-keep-awake"
 
 const (
-	appName   = "Download Keep-Awake"
-	timerID   = 1
-	trayID    = 1
-	className = "DownloadKeepAwakeWindow"
+	appName       = "Download Keep-Awake"
+	timerID       = 1
+	updateTimerID = 2
+	trayID        = 1
+	className     = "DownloadKeepAwakeWindow"
 )
 
 const (
@@ -36,6 +37,9 @@ const (
 	menuKeepAwakeNow
 	menuPause
 	menuStartup
+	menuCheckUpdates
+	menuInstallUpdate
+	menuAutoUpdate
 	menuSettings
 	menuAbout
 	menuExit
@@ -51,23 +55,24 @@ const (
 )
 
 type app struct {
-	hwnd           uintptr
-	taskbarCreated uint32
-	icons          map[state]uintptr
-	cfg            Config
-	cfgPath        string
-	cfgMod         time.Time
-	apps           *ioMonitor
-	net            *netMonitor
-	files          *partialMonitor
-	lastActive     time.Time
-	lastReason     string
-	st             state
-	stInit         bool
-	manual         bool
-	paused         bool
-	status         string
-	awakeApplied   uintptr
+	hwnd            uintptr
+	taskbarCreated  uint32
+	icons           map[state]uintptr
+	cfg             Config
+	cfgPath         string
+	cfgMod          time.Time
+	apps            *ioMonitor
+	net             *netMonitor
+	files           *partialMonitor
+	lastActive      time.Time
+	lastReason      string
+	st              state
+	stInit          bool
+	manual          bool
+	paused          bool
+	status          string
+	awakeApplied    uintptr
+	availableUpdate *releaseInfo
 }
 
 var (
@@ -81,15 +86,48 @@ func init() {
 	runtime.LockOSThread()
 }
 
+const mutexName = "Local\\DownloadKeepAwake_SingleInstance"
+
+// acquireSingleInstance takes the app-wide lock. With wait=true (used right
+// after an update) it gives the previous version a few seconds to exit.
+func acquireSingleInstance(wait bool) bool {
+	tries := 1
+	if wait {
+		tries = 40
+	}
+	for i := 0; i < tries; i++ {
+		h, _, err := procCreateMutexW.Call(0, 0, wptr(mutexName))
+		if errno, ok := err.(syscall.Errno); !(ok && errno == ERROR_ALREADY_EXISTS) && h != 0 {
+			mutex = h
+			return true
+		}
+		if h != 0 {
+			syscall.CloseHandle(syscall.Handle(h))
+		}
+		if i < tries-1 {
+			time.Sleep(250 * time.Millisecond)
+		}
+	}
+	return false
+}
+
+func releaseSingleInstance() {
+	if mutex != 0 {
+		syscall.CloseHandle(syscall.Handle(mutex))
+		mutex = 0
+	}
+}
+
 func main() {
-	name := "Local\\DownloadKeepAwake_SingleInstance"
-	h, _, err := procCreateMutexW.Call(0, 0, wptr(name))
-	mutex = h
-	if errno, ok := err.(syscall.Errno); ok && errno == ERROR_ALREADY_EXISTS {
-		messageBox(appName+" is already running.\n\nLook for its round icon in the system tray (click the ^ arrow next to the clock).",
-			appName, MB_OK|MB_ICONINFORMATION)
+	prevVersion, justUpdated := updatedFrom()
+	if !acquireSingleInstance(justUpdated) {
+		if !justUpdated {
+			messageBox(appName+" is already running.\n\nLook for its round icon in the system tray (click the ^ arrow next to the clock).",
+				appName, MB_OK|MB_ICONINFORMATION)
+		}
 		return
 	}
+	cleanupAfterUpdate()
 
 	a.cfgPath = configPath()
 	cfg, firstRun, cfgErr := loadConfig(a.cfgPath)
@@ -129,9 +167,17 @@ func main() {
 	if cfgErr != nil {
 		notify("Settings file problem", "Couldn't read config.json, using defaults: "+cfgErr.Error())
 	}
+	if justUpdated {
+		from := ""
+		if prevVersion != "" {
+			from = " (from " + prevVersion + ")"
+		}
+		notify("Updated to "+version, appName+" was updated automatically"+from+".")
+	}
 
 	tick()
 	procSetTimer.Call(a.hwnd, timerID, uintptr(a.cfg.CheckSeconds*1000), 0)
+	procSetTimer.Call(a.hwnd, updateTimerID, uintptr(updateFirstCheck/time.Millisecond), 0)
 
 	var msg MSG
 	for {
@@ -178,9 +224,15 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		}
 		return 0
 	case WM_TIMER:
-		if wParam == timerID {
+		switch wParam {
+		case timerID:
 			tick()
+		case updateTimerID:
+			onUpdateTimer()
 		}
+		return 0
+	case WM_UPDATE_RESULT:
+		handleUpdateResult()
 		return 0
 	case WM_ENDSESSION:
 		if wParam != 0 {
@@ -190,6 +242,7 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		return 0
 	case WM_DESTROY:
 		procKillTimer.Call(hwnd, timerID)
+		procKillTimer.Call(hwnd, updateTimerID)
 		setAwake(false, false)
 		removeTrayIcon()
 		procPostQuitMessage.Call(0)
@@ -278,6 +331,11 @@ func tick() {
 		a.stInit = true
 	}
 	updateTrayIcon()
+
+	// An update that was held back during a download installs once things are quiet.
+	if stagedUpdate != nil && canInstallNow() {
+		installStagedUpdate()
+	}
 }
 
 func shorten(s string, n int) string {
@@ -324,9 +382,11 @@ func applyConfig(cfg Config) {
 	}
 }
 
-// toggle flips one detection setting from the tray menu and saves it.
-func toggle(field *bool) {
-	*field = !*field
+// toggle flips one setting from the tray menu and saves it.
+func toggle(field *bool) { toggleTo(field, !*field) }
+
+func toggleTo(field *bool, v bool) {
+	*field = v
 	if err := saveConfig(a.cfgPath, a.cfg); err != nil {
 		messageBox("Couldn't save the setting:\n"+err.Error(), appName, MB_OK|MB_ICONWARNING)
 	}
@@ -418,6 +478,15 @@ func showMenu() {
 	add(menuPause, "Pause (allow sleep)", checked(a.paused))
 	sep()
 	add(menuStartup, "Start with Windows", checked(startupEnabled()))
+	switch {
+	case stagedUpdate != nil:
+		add(menuInstallUpdate, "Install update "+stagedUpdate.release.Tag+" now", 0)
+	case a.availableUpdate != nil:
+		add(menuInstallUpdate, "Install update "+a.availableUpdate.Tag, 0)
+	default:
+		add(menuCheckUpdates, "Check for updates", 0)
+	}
+	add(menuAutoUpdate, "Install updates automatically", checked(a.cfg.CheckForUpdates && a.cfg.AutoInstallUpdates))
 	add(menuSettings, "Settings...", 0)
 	add(menuAbout, "About", 0)
 	sep()
@@ -453,6 +522,18 @@ func showMenu() {
 		if err := setStartup(!startupEnabled()); err != nil {
 			messageBox("Couldn't change the startup setting:\n"+err.Error(), appName, MB_OK|MB_ICONWARNING)
 		}
+	case menuCheckUpdates:
+		checkForUpdate(true, true)
+	case menuInstallUpdate:
+		if stagedUpdate != nil {
+			installStagedUpdate()
+		} else {
+			checkForUpdate(true, true)
+		}
+	case menuAutoUpdate:
+		on := !(a.cfg.CheckForUpdates && a.cfg.AutoInstallUpdates)
+		a.cfg.CheckForUpdates = true // still check, just ask before installing when off
+		toggleTo(&a.cfg.AutoInstallUpdates, on)
 	case menuSettings:
 		openWith("notepad.exe", `"`+a.cfgPath+`"`)
 	case menuAbout:

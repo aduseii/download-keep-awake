@@ -13,7 +13,7 @@ import (
 	"unsafe"
 )
 
-const currentConfigVersion = 2
+const currentConfigVersion = 3
 
 type Config struct {
 	Help          string `json:"_help"`
@@ -38,6 +38,9 @@ type Config struct {
 	CheckSeconds  int  `json:"checkSeconds"`
 	KeepScreenOn  bool `json:"keepScreenOn"`
 	Notifications bool `json:"notifications"`
+
+	CheckForUpdates    bool `json:"checkForUpdates"`
+	AutoInstallUpdates bool `json:"autoInstallUpdates"`
 }
 
 const configHelp = "The PC stays awake while ANY of the enabled detectors sees a download. " +
@@ -45,6 +48,7 @@ const configHelp = "The PC stays awake while ANY of the enabled detectors sees a
 	"detectPartialFiles: in-progress download files (e.g. .crdownload, .part) still growing in watchFolders (%DOWNLOADS% = your Downloads folder). " +
 	"detectApps: the download manager programs in downloadManagers moving more than minSpeedKBps (see Task Manager > Details for names). " +
 	"graceSeconds: how long to stay awake after downloading stops or stalls. keepScreenOn: also keep the display on. " +
+	"checkForUpdates / autoInstallUpdates: look for new versions on GitHub every 6 hours and install them automatically (never during a download). " +
 	"Save this file and changes apply within a few seconds."
 
 func defaultDownloadManagers() []string {
@@ -94,6 +98,9 @@ func defaultConfig() Config {
 		CheckSeconds:     3,
 		KeepScreenOn:     false,
 		Notifications:    true,
+
+		CheckForUpdates:    true,
+		AutoInstallUpdates: true,
 	}
 }
 
@@ -127,6 +134,10 @@ func (c *Config) sanitise() {
 func (c *Config) migrate() bool {
 	if c.ConfigVersion >= currentConfigVersion {
 		return false
+	}
+	if c.ConfigVersion >= 2 {
+		c.ConfigVersion = currentConfigVersion // v2 -> v3 only added update settings (defaults on)
+		return true
 	}
 	// v1 only had download managers: keep the user's list and add any new defaults.
 	have := map[string]bool{}

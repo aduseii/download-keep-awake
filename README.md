@@ -34,8 +34,9 @@ Only **downloading** counts — uploading or torrent seeding doesn't keep your P
   - 🟠 Amber – paused
 - **Live status** in the tray menu: current download speed and what was detected.
 - **Notifications** when a download starts keeping the PC awake and when sleep is allowed again.
+- **Updates itself** – checks GitHub for new versions and installs them automatically (never in the middle of a download).
 - **Start with Windows**, **Pause** and **Keep awake now** in the tray menu.
-- **Single portable `.exe`**, ~2.5 MB, no installer, no admin rights, no .NET or other runtime needed.
+- **Single portable `.exe`**, ~6 MB, no installer, no admin rights, no .NET or other runtime needed.
 
 > **Streaming counts as downloading.** HD video streams above the 150 KB/s threshold keep the PC awake too (video players usually do that anyway). If you'd rather they didn't, raise `networkMinSpeedKBps` or switch off "Detect any download" and rely on the other two detectors.
 
@@ -69,14 +70,29 @@ Right-click the tray icon → **Settings…** opens `%APPDATA%\DownloadKeepAwake
 | `checkSeconds` | How often to check. | `3` |
 | `keepScreenOn` | Also stop the display from turning off while downloading. | `false` |
 | `notifications` | Show a notification when keep-awake starts and stops. | `true` |
+| `checkForUpdates` | Look for a new version on GitHub 30 s after start and every 6 hours. | `true` |
+| `autoInstallUpdates` | Install new versions automatically. When off, you get a notification and install from the tray menu. | `true` |
 
-Upgrading from 1.0? Your existing settings are kept and the new options are added automatically.
+Upgrading from an older version? Your existing settings are kept and the new options are added automatically.
 
 ## How it works
 
 Every few seconds the app reads Windows' network adapter counters (`GetIfTable2`), scans your Downloads folder for growing partial files, and reads the I/O counters of known download managers. If any of them shows a download, it tells Windows the system is in use via [`SetThreadExecutionState`](https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-setthreadexecutionstate) (`ES_SYSTEM_REQUIRED`) — the same mechanism video players and installers use. When nothing has been downloading for `graceSeconds`, it releases that request and Windows' own sleep timer takes over again.
 
 It prevents **automatic idle** sleep and hibernation. It deliberately does *not* override you: choosing Sleep from the Start menu, closing a laptop lid, or critical-battery hibernation still work as usual. You can see it working with `powercfg /requests` in an admin terminal.
+
+## Automatic updates
+
+The app keeps itself up to date from this repository's [Releases](../../releases):
+
+1. 30 seconds after starting, and every 6 hours after that, it asks GitHub for the latest release.
+2. If there's a newer version, it downloads the `.exe` for your PC (x64 or ARM64) **next to the current one**.
+3. The download is checked against `SHA256SUMS.txt` from the same release. Anything that doesn't match is thrown away.
+4. As soon as nothing is downloading, it swaps the new `.exe` in, restarts itself in about a second and shows an **"Updated to vX.Y.Z"** notification. If something is downloading, it waits until the download is done.
+
+You can also use **Check for updates** in the tray menu, or untick **Install updates automatically** to be asked first.
+
+For updates to work, keep the `.exe` in a folder you can write to (e.g. `Documents`, `%LOCALAPPDATA%\Programs`), not in `C:\Program Files`. The repository must be public so the app can see its releases.
 
 ## Uninstall
 
@@ -98,7 +114,7 @@ The icon and manifest are embedded from the committed `rsrc_windows_*.syso` file
 
 ### Releasing
 
-Push a version tag and GitHub Actions builds both executables and publishes a release:
+Push a version tag and GitHub Actions builds both executables, publishes a release, and **every installed copy updates itself within 6 hours**:
 
 ```sh
 git tag v1.0.0
