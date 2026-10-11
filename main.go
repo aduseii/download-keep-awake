@@ -4,7 +4,7 @@
 //go:generate rsrc -manifest assets/app.manifest -ico assets/icon.ico -arch arm64 -o rsrc_windows_arm64.syso
 
 // Download Keep-Awake: a tiny Windows tray app that stops the PC from sleeping
-// or hibernating while a download manager is actively downloading.
+// or hibernating while anything is downloading.
 package main
 
 import (
@@ -16,7 +16,7 @@ import (
 	"unsafe"
 )
 
-var version = "1.0.0" // overridden at build time with -ldflags "-X main.version=..."
+var version = "1.1.0" // overridden at build time with -ldflags "-X main.version=..."
 
 // repoURL is set at build time by the GitHub workflow to this repository's page.
 var repoURL = "https://github.com/konohafiles/download-keep-awake"
@@ -30,6 +30,9 @@ const (
 
 const (
 	menuStatus = iota + 1
+	menuDetectNetwork
+	menuDetectFiles
+	menuDetectApps
 	menuKeepAwakeNow
 	menuPause
 	menuStartup
@@ -41,8 +44,7 @@ const (
 type state int
 
 const (
-	stIdle        state = iota // no download manager running
-	stDMIdle                   // download manager open, nothing downloading
+	stIdle        state = iota // nothing downloading, normal sleep allowed
 	stDownloading              // keeping the PC awake for a download
 	stManual                   // user chose "keep awake now"
 	stPaused                   // user paused the app
@@ -55,8 +57,11 @@ type app struct {
 	cfg            Config
 	cfgPath        string
 	cfgMod         time.Time
-	mon            *ioMonitor
+	apps           *ioMonitor
+	net            *netMonitor
+	files          *partialMonitor
 	lastActive     time.Time
+	lastReason     string
 	st             state
 	stInit         bool
 	manual         bool
@@ -90,7 +95,9 @@ func main() {
 	cfg, firstRun, cfgErr := loadConfig(a.cfgPath)
 	a.cfg = cfg
 	a.cfgMod = modTime(a.cfgPath)
-	a.mon = newIOMonitor()
+	a.apps = newIOMonitor()
+	a.net = newNetMonitor()
+	a.files = newPartialMonitor()
 	a.status = "Starting..."
 
 	if err := createWindow(); err != nil {
@@ -101,7 +108,6 @@ func main() {
 	size := trayIconSize()
 	a.icons = map[state]uintptr{
 		stIdle:        makeIcon(size, colorIdle),
-		stDMIdle:      makeIcon(size, colorIdle),
 		stDownloading: makeIcon(size, colorActive),
 		stManual:      makeIcon(size, colorManual),
 		stPaused:      makeIcon(size, colorPaused),
@@ -110,7 +116,8 @@ func main() {
 
 	if firstRun {
 		if messageBox(appName+" is now running in your system tray.\n\n"+
-			"Whenever your download manager is downloading, your PC won't go to sleep or hibernate. "+
+			"Whenever something is downloading (browser downloads, download managers, Steam and other game launchers, "+
+			"torrents, Windows Update...), your PC won't go to sleep or hibernate. "+
 			"When downloads finish, your normal sleep settings come back automatically.\n\n"+
 			"Start "+appName+" automatically when Windows starts?",
 			appName, MB_YESNO|MB_ICONQUESTION) == IDYES {
@@ -200,14 +207,38 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 
 func tick() {
 	reloadConfigIfChanged()
-
-	running, bps := a.mon.poll(a.cfg.DownloadManagers)
+	c := &a.cfg
 	now := time.Now()
-	if len(running) > 0 && bps >= a.cfg.MinSpeedKBps*1024 {
-		a.lastActive = now
+
+	// Always sample the network so the speed shown in the menu stays accurate
+	// and the averaging window is already full when detection is switched on.
+	netAvg, netNow := a.net.poll(time.Duration(c.NetworkWindowSeconds) * time.Second)
+
+	var reasons []string
+	if c.DetectNetwork && netAvg >= c.NetworkMinSpeedKBps*1024 {
+		reasons = append(reasons, "downloading at "+formatSpeed(netNow))
 	}
-	downloading := len(running) > 0 && !a.lastActive.IsZero() &&
-		now.Sub(a.lastActive) < time.Duration(a.cfg.GraceSeconds)*time.Second
+	if c.DetectPartialFiles {
+		if files := a.files.poll(c.WatchFolders, c.PartialExtensions); len(files) > 0 {
+			label := shorten(files[0], 40)
+			if len(files) > 1 {
+				label += fmt.Sprintf(" +%d more", len(files)-1)
+			}
+			reasons = append(reasons, "saving "+label)
+		}
+	}
+	if c.DetectApps {
+		running, bps := a.apps.poll(c.DownloadManagers)
+		if len(running) > 0 && bps >= c.MinSpeedKBps*1024 {
+			reasons = append(reasons, strings.Join(running, ", ")+" active")
+		}
+	}
+
+	if len(reasons) > 0 {
+		a.lastActive = now
+		a.lastReason = strings.Join(reasons, " · ")
+	}
+	downloading := !a.lastActive.IsZero() && now.Sub(a.lastActive) < time.Duration(c.GraceSeconds)*time.Second
 
 	var next state
 	switch {
@@ -217,38 +248,44 @@ func tick() {
 	case a.manual:
 		next = stManual
 		a.status = "Keeping PC awake (turned on manually)"
+	case downloading && len(reasons) > 0:
+		next = stDownloading
+		a.status = "Keeping PC awake - " + a.lastReason
 	case downloading:
 		next = stDownloading
-		if bps >= a.cfg.MinSpeedKBps*1024 {
-			a.status = fmt.Sprintf("Keeping PC awake - %s downloading at %s", strings.Join(running, ", "), formatSpeed(bps))
-		} else {
-			left := time.Duration(a.cfg.GraceSeconds)*time.Second - now.Sub(a.lastActive)
-			a.status = fmt.Sprintf("Keeping PC awake - download paused/stalled (%ds grace left)", int(left.Seconds()+0.5))
-		}
-	case len(running) > 0:
-		next = stDMIdle
-		a.status = strings.Join(running, ", ") + " is open - no active download"
+		left := time.Duration(c.GraceSeconds)*time.Second - now.Sub(a.lastActive)
+		a.status = fmt.Sprintf("Keeping PC awake - download stalled or between files (%ds left)", int(left.Seconds()+0.5))
+	case !c.DetectNetwork && !c.DetectPartialFiles && !c.DetectApps:
+		next = stIdle
+		a.status = "All detection is switched off - normal sleep allowed"
 	default:
 		next = stIdle
-		a.status = "Idle - no download manager running"
+		a.status = "Idle - no downloads (network " + formatSpeed(netNow) + ")"
 	}
 
-	awake := next == stDownloading || next == stManual
-	setAwake(awake, a.cfg.KeepScreenOn)
+	setAwake(next == stDownloading || next == stManual, c.KeepScreenOn)
 
 	if !a.stInit || next != a.st {
 		prev := a.st
 		a.st = next
 		if a.stInit {
-			if next == stDownloading && prev != stManual {
-				notify("Download detected", "Your PC will stay awake until the download finishes.")
-			} else if prev == stDownloading && (next == stIdle || next == stDMIdle) {
+			if next == stDownloading && prev == stIdle {
+				notify("Download detected", "Your PC will stay awake until downloads finish.\n"+shorten(a.lastReason, 120))
+			} else if prev == stDownloading && next == stIdle {
 				notify("Downloads finished", "Your normal sleep settings are back.")
 			}
 		}
 		a.stInit = true
 	}
 	updateTrayIcon()
+}
+
+func shorten(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n-1]) + "…"
 }
 
 func setAwake(on, screen bool) {
@@ -270,17 +307,31 @@ func reloadConfigIfChanged() {
 	if mt.Equal(a.cfgMod) {
 		return
 	}
-	a.cfgMod = mt
 	cfg, _, err := loadConfig(a.cfgPath)
+	a.cfgMod = modTime(a.cfgPath) // loadConfig may have re-saved a migrated file
 	if err != nil {
 		notify("Settings not applied", "config.json has a mistake, so the previous settings are still in use. "+err.Error())
 		return
 	}
+	applyConfig(cfg)
+}
+
+func applyConfig(cfg Config) {
 	oldInterval := a.cfg.CheckSeconds
 	a.cfg = cfg
 	if cfg.CheckSeconds != oldInterval && a.hwnd != 0 {
 		procSetTimer.Call(a.hwnd, timerID, uintptr(cfg.CheckSeconds*1000), 0)
 	}
+}
+
+// toggle flips one detection setting from the tray menu and saves it.
+func toggle(field *bool) {
+	*field = !*field
+	if err := saveConfig(a.cfgPath, a.cfg); err != nil {
+		messageBox("Couldn't save the setting:\n"+err.Error(), appName, MB_OK|MB_ICONWARNING)
+	}
+	a.cfgMod = modTime(a.cfgPath)
+	tick()
 }
 
 func formatSpeed(bps float64) string {
@@ -324,11 +375,7 @@ func removeTrayIcon() {
 }
 
 func tooltip() string {
-	t := appName + "\n" + a.status
-	if len([]rune(t)) > 127 {
-		t = string([]rune(t)[:124]) + "..."
-	}
-	return t
+	return shorten(appName+"\n"+a.status, 127)
 }
 
 func notify(title, text string) {
@@ -361,7 +408,11 @@ func showMenu() {
 	}
 	sep := func() { procAppendMenuW.Call(m, MF_SEPARATOR, 0, 0) }
 
-	add(menuStatus, a.status, MF_GRAYED)
+	add(menuStatus, shorten(a.status, 100), MF_GRAYED)
+	sep()
+	add(menuDetectNetwork, "Detect any download (network traffic)", checked(a.cfg.DetectNetwork))
+	add(menuDetectFiles, "Detect browser && torrent downloads (Downloads folder)", checked(a.cfg.DetectPartialFiles))
+	add(menuDetectApps, "Detect download manager apps", checked(a.cfg.DetectApps))
 	sep()
 	add(menuKeepAwakeNow, "Keep awake now (ignore downloads)", checked(a.manual))
 	add(menuPause, "Pause (allow sleep)", checked(a.paused))
@@ -380,6 +431,12 @@ func showMenu() {
 	procPostMessageW.Call(a.hwnd, WM_NULL, 0, 0)
 
 	switch int(cmd) {
+	case menuDetectNetwork:
+		toggle(&a.cfg.DetectNetwork)
+	case menuDetectFiles:
+		toggle(&a.cfg.DetectPartialFiles)
+	case menuDetectApps:
+		toggle(&a.cfg.DetectApps)
 	case menuKeepAwakeNow:
 		a.manual = !a.manual
 		if a.manual {
@@ -399,7 +456,8 @@ func showMenu() {
 	case menuSettings:
 		openWith("notepad.exe", `"`+a.cfgPath+`"`)
 	case menuAbout:
-		about := fmt.Sprintf("%s %s\n\nKeeps your PC from sleeping or hibernating while your download manager is downloading.\n\n"+
+		about := fmt.Sprintf("%s %s\n\nKeeps your PC from sleeping or hibernating while anything is downloading: "+
+			"browsers, download managers, Steam and other game launchers, torrents, Windows Update and more.\n\n"+
 			"Icon colours:\n  Green - keeping PC awake for a download\n  Blue - kept awake manually\n  Grey - idle, normal sleep allowed\n  Amber - paused\n\n"+
 			"Settings file:\n%s\n\nOpen the project page on GitHub?", appName, version, a.cfgPath)
 		if messageBox(about, "About "+appName, MB_YESNO|MB_ICONINFORMATION) == IDYES {

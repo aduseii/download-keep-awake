@@ -2,18 +2,29 @@
 
 <h1 align="center">Download Keep-Awake</h1>
 
-<p align="center">A tiny Windows 11 / 10 tray app that stops your PC from sleeping or hibernating <b>while your download manager is downloading</b> — and gives your normal sleep settings back the moment it's done.</p>
+<p align="center">A tiny Windows 11 / 10 tray app that stops your PC from sleeping or hibernating <b>while anything is downloading</b> — and gives your normal sleep settings back the moment it's done.</p>
 
 ---
 
 ## Why
 
-Windows' sleep timer doesn't know you're halfway through a 20 GB download. Turning sleep off entirely means your PC stays on all night after the download finishes. Download Keep-Awake sits in the system tray, watches your download manager, and blocks sleep **only while data is actually flowing**.
+Windows' sleep timer doesn't know you're halfway through a 20 GB download. Turning sleep off entirely means your PC stays on all night after the download finishes. Download Keep-Awake sits in the system tray and blocks sleep **only while data is actually downloading** — from any app.
+
+## What it detects
+
+The PC stays awake while **any** of these sees a download (each can be switched on/off from the tray menu):
+
+| Detector | Catches | How |
+|---|---|---|
+| **Any download (network traffic)** | Everything: browsers, Steam / Epic / Xbox / Battle.net, torrents, Windows Update, cloud sync, download managers | Incoming traffic on your real network adapters (Wi-Fi, Ethernet, mobile) above **150 KB/s**, averaged over 15 s |
+| **Browser & torrent downloads** | Even slow downloads in Chrome, Edge, Brave, Opera, Firefox, qBittorrent, uTorrent, BitComet… | In-progress files that are still growing in your Downloads folder (`.crdownload`, `.part`, `.!qB`, `.!ut`…) |
+| **Download manager apps** | IDM, Free Download Manager, Neat DM, JDownloader, XDM, Motrix, EagleGet, uGet, FlashGet, aria2, Persepolis | The app's own data activity above 64 KB/s |
+
+Only **downloading** counts — uploading or torrent seeding doesn't keep your PC awake. VPN, virtual-machine and loopback adapters are ignored so traffic isn't counted twice.
 
 ## Features
 
-- **Automatic** – detects real download activity from your download manager; nothing to switch on or off.
-- **Precise** – measures only the download manager's own traffic, so YouTube, games or Windows Update don't keep your PC awake.
+- **Automatic** – nothing to switch on or off; just leave it running.
 - **Stall-tolerant** – waits 90 seconds (configurable) after a download stops before allowing sleep, so a short stall or a gap between files doesn't end your download.
 - **Leaves your screen alone** – the display can still turn off as normal (optional setting to keep it on).
 - **Tray icon shows the state at a glance**
@@ -21,28 +32,12 @@ Windows' sleep timer doesn't know you're halfway through a 20 GB download. Turni
   - 🔵 Blue – kept awake manually ("Keep awake now")
   - ⚪ Grey – idle, normal sleep allowed
   - 🟠 Amber – paused
+- **Live status** in the tray menu: current download speed and what was detected.
 - **Notifications** when a download starts keeping the PC awake and when sleep is allowed again.
-- **Start with Windows** toggle, **Pause** and **Keep awake now** in the tray menu.
-- **Single portable `.exe`**, ~2 MB, no installer, no admin rights, no .NET or other runtime needed.
+- **Start with Windows**, **Pause** and **Keep awake now** in the tray menu.
+- **Single portable `.exe`**, ~2.5 MB, no installer, no admin rights, no .NET or other runtime needed.
 
-## Supported download managers
-
-Works out of the box with:
-
-| Download manager | Process name |
-|---|---|
-| Free Download Manager | `fdm` |
-| Internet Download Manager (IDM) | `IDMan` |
-| Neat Download Manager | `NeatDM` |
-| Xtreme Download Manager | `xdm-app`, `xdman` |
-| JDownloader 2 | `JDownloader2` |
-| Motrix | `Motrix` |
-| EagleGet | `EagleGet` |
-| uGet | `uget-gtk` |
-| FlashGet | `FlashGet` |
-| aria2 | `aria2c` |
-
-Using something else (or a torrent client)? Add it in **Settings** — see below.
+> **Streaming counts as downloading.** HD video streams above the 150 KB/s threshold keep the PC awake too (video players usually do that anyway). If you'd rather they didn't, raise `networkMinSpeedKBps` or switch off "Detect any download" and rely on the other two detectors.
 
 ## Install
 
@@ -57,33 +52,29 @@ The round icon appears in the system tray (click the **^** next to the clock if 
 
 ## Settings
 
-Right-click the tray icon → **Settings…** opens `%APPDATA%\DownloadKeepAwake\config.json` in Notepad. Save the file and changes apply within a few seconds — no restart needed.
-
-```json
-{
-  "downloadManagers": ["fdm", "IDMan", "qbittorrent"],
-  "minSpeedKBps": 64,
-  "graceSeconds": 90,
-  "checkSeconds": 3,
-  "keepScreenOn": false,
-  "notifications": true
-}
-```
+Right-click the tray icon → **Settings…** opens `%APPDATA%\DownloadKeepAwake\config.json` in Notepad. Save the file and changes apply within a few seconds — no restart needed. The three detectors can also be toggled straight from the tray menu.
 
 | Setting | What it does | Default |
 |---|---|---|
+| `detectNetwork` | Detect any download from any app via network traffic. | `true` |
+| `networkMinSpeedKBps` | Incoming speed that counts as downloading. | `150` |
+| `networkWindowSeconds` | Speed is averaged over this many seconds, so brief bursts are ignored. | `15` |
+| `detectPartialFiles` | Detect in-progress download files that are still growing. | `true` |
+| `watchFolders` | Folders to watch (and two levels of subfolders). `%DOWNLOADS%` = your Downloads folder, wherever it is. Add your torrent or Steam download folders here if they're elsewhere. | `["%DOWNLOADS%"]` |
+| `partialExtensions` | File endings that mean "still downloading". | `.crdownload`, `.part`, `.!qB`, … |
+| `detectApps` | Detect download manager programs. | `true` |
 | `downloadManagers` | Programs to watch. Find the name in **Task Manager → Details** (`.exe` is optional). | see table above |
-| `minSpeedKBps` | Activity slower than this counts as "not downloading". | `64` |
+| `minSpeedKBps` | Activity from those programs that counts as downloading. | `64` |
 | `graceSeconds` | How long to stay awake after a download stops or stalls. | `90` |
 | `checkSeconds` | How often to check. | `3` |
 | `keepScreenOn` | Also stop the display from turning off while downloading. | `false` |
 | `notifications` | Show a notification when keep-awake starts and stops. | `true` |
 
-> Torrent clients keep uploading (seeding) after a download finishes, which would keep your PC awake. Add them only if that's what you want.
+Upgrading from 1.0? Your existing settings are kept and the new options are added automatically.
 
 ## How it works
 
-Every few seconds the app reads Windows' per-process I/O counters for the download-manager processes. If they're moving more than `minSpeedKBps`, it tells Windows the system is in use via [`SetThreadExecutionState`](https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-setthreadexecutionstate) (`ES_SYSTEM_REQUIRED`) — the same mechanism video players and installers use. When activity has been below the threshold for `graceSeconds`, it releases that request and Windows' own sleep timer takes over again.
+Every few seconds the app reads Windows' network adapter counters (`GetIfTable2`), scans your Downloads folder for growing partial files, and reads the I/O counters of known download managers. If any of them shows a download, it tells Windows the system is in use via [`SetThreadExecutionState`](https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-setthreadexecutionstate) (`ES_SYSTEM_REQUIRED`) — the same mechanism video players and installers use. When nothing has been downloading for `graceSeconds`, it releases that request and Windows' own sleep timer takes over again.
 
 It prevents **automatic idle** sleep and hibernation. It deliberately does *not* override you: choosing Sleep from the Start menu, closing a laptop lid, or critical-battery hibernation still work as usual. You can see it working with `powercfg /requests` in an admin terminal.
 
