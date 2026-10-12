@@ -58,34 +58,28 @@ HD video streaming counts as downloading too. If you don't want that, raise `net
 | `checkSeconds` | How often to check. | `3` |
 | `keepScreenOn` | Also keep the display on while downloading. | `false` |
 | `notifications` | Show a notification when keep-awake starts and stops. | `true` |
-| `checkForUpdates` | Look for a new version on launch and every 6 hours. | `true` |
-| `autoInstallUpdates` | Install new versions by themselves. When off, you're asked first. | `true` |
+| `checkForUpdates` | Look for a new version on launch and every 6 hours, and download it in the background. | `true` |
+| `autoInstallUpdates` | Install new versions without asking. When off, you click **Update now**. | `false` |
 
 ## How updates work
 
-Every time files change in this repository, GitHub builds the app (the **Build and release Download Keep-Awake** workflow under the **Actions** tab) and publishes it on the **Releases** page. Installed copies check that page shortly after launch and every six hours, and download the new version quietly. The download is checked against `SHA256SUMS.txt` from the same release; anything that doesn't match is thrown away.
+**Getting an update is one click.** Installed copies check this repository's **Releases** page shortly after starting and every six hours. When there's a new version, they download it quietly in the background and check it against `SHA256SUMS.txt` from the same release; anything that doesn't match is thrown away. Then you see:
 
-- If nothing is downloading, the update installs straight away: the app restarts in about a second and shows **"Updated to x.y.z"**.
-- If something is downloading, it shows **"Download Keep-Awake x.y.z is ready · Click here to restart now"** and otherwise installs by itself when your downloads finish. It also installs the next time the app closes.
+- a notification, **"Update ready: vX.Y.Z — click here to update now"**, and
+- **Update now to vX.Y.Z** in bold at the top of the tray menu.
 
-You can also use **Check for updates** in the tray menu.
+Click either one and the app swaps in the new version and restarts in about a second. Nothing installs until you click. **Check for updates** in the tray menu looks right away and, if there's something newer, downloads and installs it in the same click. If you'd rather never be asked, tick **Install updates without asking** and updates install by themselves whenever nothing is downloading.
 
-A build only publishes when the number in `VERSION` is higher than the last release. Each change should raise it: `1.3.0` → `1.3.1` for fixes, `1.4.0` for new features.
+**Publishing is automatic.** Every change pushed to the main branch is built by GitHub (the **Build and release Download Keep-Awake** workflow under the **Actions** tab, about a minute) and published as a new release, numbered automatically: the last release +1 (`1.4.0` → `1.4.1`). Nobody needs to edit a version number. To jump to a bigger number for a major change, put it in `VERSION` (for example `2.0.0`); it's used once it's higher than the last release. Changes to only the README or LICENSE don't make a release.
 
-### Publishing a change from the GitHub website
-
-1. Open the repository, click **Add file → Upload files**, and drop in the changed files, keeping their folders. Include `VERSION` with the new number.
-2. Click **Commit changes**.
-3. Open the **Actions** tab. The build takes about 2 minutes. A green tick means the new version is on the Releases page and installed copies will pick it up.
-
-If a build fails, open it in the Actions tab; the red step shows what went wrong.
+If a build fails, open it in the Actions tab; the red step shows what went wrong. Re-running it repairs that release instead of making a new one.
 
 ## Building on your own computer (optional)
 
 You need [Go](https://go.dev/dl/) 1.22 or newer. Nothing else: the app talks to Windows directly.
 
 ```sh
-go build -trimpath -ldflags "-s -w -H windowsgui -X main.version=1.3.0" -o DownloadKeepAwake.exe .
+go build -trimpath -ldflags "-s -w -H windowsgui -X main.version=1.4.0" -o DownloadKeepAwake.exe .
 ```
 
 From Linux or macOS, put `GOOS=windows GOARCH=amd64` in front. To try a build without it installing itself, run it with `--portable`.

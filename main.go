@@ -16,7 +16,9 @@ import (
 	"unsafe"
 )
 
-var version = "1.3.0" // overridden at build time with -ldflags "-X main.version=..."
+// Set at build time by the GitHub workflow (-ldflags "-X main.version=1.2.3").
+// Local builds without it are "dev" builds that only update when asked.
+var version = "0.0.0-dev"
 
 // repoURL is set at build time by the GitHub workflow to this repository's page.
 var repoURL = "https://github.com/aduseii/download-keep-awake"
@@ -73,6 +75,7 @@ type app struct {
 	status          string
 	awakeApplied    uintptr
 	availableUpdate *releaseInfo
+	notifiedTag     string
 }
 
 var (
@@ -351,7 +354,7 @@ func tick() {
 	updateTrayIcon()
 
 	// An update that was held back during a download installs once things are quiet.
-	if stagedUpdate != nil && canInstallNow() {
+	if stagedUpdate != nil && a.cfg.AutoInstallUpdates && canInstallNow() {
 		installStagedUpdate()
 	}
 }
@@ -453,7 +456,11 @@ func removeTrayIcon() {
 }
 
 func tooltip() string {
-	return shorten(appName+"\n"+a.status, 127)
+	t := appName + "\n" + a.status
+	if stagedUpdate != nil {
+		t = appName + " - update " + stagedUpdate.release.Tag + " ready\n" + a.status
+	}
+	return shorten(t, 127)
 }
 
 func notify(title, text string) {
@@ -487,6 +494,10 @@ func showMenu() {
 	sep := func() { procAppendMenuW.Call(m, MF_SEPARATOR, 0, 0) }
 
 	add(menuStatus, shorten(a.status, 100), MF_GRAYED)
+	if stagedUpdate != nil {
+		add(menuInstallUpdate, "Update now to "+stagedUpdate.release.Tag, 0)
+		procSetMenuDefaultItem.Call(m, menuInstallUpdate, 0) // bold, so it stands out
+	}
 	sep()
 	add(menuDetectNetwork, "Detect any download (network traffic)", checked(a.cfg.DetectNetwork))
 	add(menuDetectFiles, "Detect browser && torrent downloads (Downloads folder)", checked(a.cfg.DetectPartialFiles))
@@ -496,15 +507,8 @@ func showMenu() {
 	add(menuPause, "Pause (allow sleep)", checked(a.paused))
 	sep()
 	add(menuStartup, "Start with Windows", checked(startupEnabled()))
-	switch {
-	case stagedUpdate != nil:
-		add(menuInstallUpdate, "Install update "+stagedUpdate.release.Tag+" now", 0)
-	case a.availableUpdate != nil:
-		add(menuInstallUpdate, "Install update "+a.availableUpdate.Tag, 0)
-	default:
-		add(menuCheckUpdates, "Check for updates", 0)
-	}
-	add(menuAutoUpdate, "Install updates automatically", checked(a.cfg.CheckForUpdates && a.cfg.AutoInstallUpdates))
+	add(menuCheckUpdates, "Check for updates", 0)
+	add(menuAutoUpdate, "Install updates without asking", checked(a.cfg.CheckForUpdates && a.cfg.AutoInstallUpdates))
 	add(menuSettings, "Settings...", 0)
 	add(menuAbout, "About", 0)
 	sep()
@@ -541,12 +545,12 @@ func showMenu() {
 			messageBox("Couldn't change the startup setting:\n"+err.Error(), appName, MB_OK|MB_ICONWARNING)
 		}
 	case menuCheckUpdates:
-		checkForUpdate(true, true)
+		checkForUpdate(true) // finds, downloads and installs the latest in one click
 	case menuInstallUpdate:
 		if stagedUpdate != nil {
 			installStagedUpdate()
 		} else {
-			checkForUpdate(true, true)
+			checkForUpdate(true)
 		}
 	case menuAutoUpdate:
 		on := !(a.cfg.CheckForUpdates && a.cfg.AutoInstallUpdates)

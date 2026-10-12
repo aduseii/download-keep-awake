@@ -29,6 +29,7 @@ var (
 	procAppendMenuW             = user32.NewProc("AppendMenuW")
 	procTrackPopupMenu          = user32.NewProc("TrackPopupMenu")
 	procDestroyMenu             = user32.NewProc("DestroyMenu")
+	procSetMenuDefaultItem      = user32.NewProc("SetMenuDefaultItem")
 	procSetForegroundWindow     = user32.NewProc("SetForegroundWindow")
 	procGetCursorPos            = user32.NewProc("GetCursorPos")
 	procMessageBoxW             = user32.NewProc("MessageBoxW")

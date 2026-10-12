@@ -48,11 +48,10 @@ type releaseInfo struct {
 }
 
 type updateResult struct {
-	manual    bool
-	err       error
-	release   *releaseInfo // newer release found (nil = up to date)
-	staged    string       // path of downloaded + verified new .exe, ready to install
-	notWanted bool         // newer release exists but auto-install is off
+	manual  bool
+	err     error
+	release *releaseInfo // newer release found (nil = up to date)
+	staged  string       // path of downloaded + verified new .exe, ready to install
 }
 
 var (
@@ -258,9 +257,17 @@ func download(r *releaseInfo) (string, error) {
 }
 
 // checkForUpdate runs in the background and posts its result to the window.
-func checkForUpdate(manual, autoInstall bool) {
+// A newer release is always downloaded and verified in the background, so the
+// "Update now" button installs it instantly. Must be called on the UI thread.
+func checkForUpdate(manual bool) {
 	if !updateBusy.CompareAndSwap(false, true) {
 		return
+	}
+	// Don't re-download a version that's already downloaded and waiting.
+	var floor [3]int
+	haveFloor := false
+	if stagedUpdate != nil && stagedUpdate.release != nil {
+		floor, haveFloor = stagedUpdate.release.Version, true
 	}
 	go func() {
 		defer updateBusy.Store(false)
@@ -280,6 +287,9 @@ func checkForUpdate(manual, autoInstall bool) {
 			}
 			cur = [3]int{0, 0, 0}
 		}
+		if haveFloor && newer(floor, cur) {
+			cur = floor
+		}
 		r, err := fetchLatestRelease()
 		if err != nil {
 			res.err = err
@@ -289,10 +299,6 @@ func checkForUpdate(manual, autoInstall bool) {
 			return
 		}
 		res.release = r
-		if !autoInstall && !manual {
-			res.notWanted = true
-			return
-		}
 		res.staged, res.err = download(r)
 	}()
 }
@@ -300,8 +306,8 @@ func checkForUpdate(manual, autoInstall bool) {
 // onUpdateTimer runs on the UI thread: first 30s after start, then every 6 hours.
 func onUpdateTimer() {
 	procSetTimer.Call(a.hwnd, updateTimerID, uintptr(updateInterval/time.Millisecond), 0)
-	if a.cfg.CheckForUpdates && stagedUpdate == nil {
-		checkForUpdate(false, a.cfg.AutoInstallUpdates)
+	if a.cfg.CheckForUpdates {
+		checkForUpdate(false)
 	}
 }
 
@@ -321,19 +327,25 @@ func handleUpdateResult() {
 		// background check failed (offline, rate-limited...): try again next time, quietly
 	case res.release == nil:
 		if res.manual {
+			if stagedUpdate != nil { // already downloaded and waiting: the click means "install it"
+				installStagedUpdate()
+				return
+			}
 			messageBox(fmt.Sprintf("You're up to date.\n\n%s %s is the latest version.", appName, version), appName, MB_OK|MB_ICONINFORMATION)
 		}
-	case res.notWanted:
-		a.availableUpdate = res.release
-		notify("Update available", fmt.Sprintf("%s %s is out. Right-click the tray icon to install it.", appName, res.release.Tag))
 	default:
 		a.availableUpdate = res.release
 		stagedUpdate = res
-		if res.manual || canInstallNow() {
+		updateTrayIcon()
+		switch {
+		case res.manual:
+			installStagedUpdate() // the user clicked: install right away
+		case a.cfg.AutoInstallUpdates && canInstallNow():
 			installStagedUpdate()
-		} else {
-			notify(fmt.Sprintf("%s %s is ready", appName, res.release.Tag),
-				"Click here to restart now. Otherwise it installs by itself when your downloads finish.")
+		case a.notifiedTag != res.release.Tag:
+			a.notifiedTag = res.release.Tag
+			notify(fmt.Sprintf("Update ready: %s", res.release.Tag),
+				"Click here to update now, or right-click the tray icon and choose \"Update now\".")
 		}
 	}
 }
@@ -398,8 +410,8 @@ func swapAndRestart(staged string) error {
 // restarting it; the new version runs the next time the app starts.
 func installOnExit() {
 	res := stagedUpdate
-	if res == nil || res.staged == "" {
-		return
+	if res == nil || res.staged == "" || !a.cfg.AutoInstallUpdates {
+		return // with automatic installs off, only the Update now button installs
 	}
 	stagedUpdate = nil
 	exe, err := exePath()

@@ -1,14 +1,17 @@
 # Builds the Windows app on GitHub's machines and publishes it as a Release.
-# Installed copies of Download Keep-Awake watch this repository's Releases and update themselves.
+# Installed copies of Download Keep-Awake see the new release and offer "Update now".
 #
-# It runs whenever files change on the main branch. If VERSION still has a version
-# that's already fully released, it stops early; raise VERSION to publish an update.
-# A release that's missing files (for example after a failed upload) is repaired.
+# Every change pushed to the main branch becomes a new version automatically:
+# the last release number +1 (1.4.0 -> 1.4.1). To jump to a bigger number, put it
+# in VERSION (e.g. 2.0.0) and it's used once it's higher than the last release.
+# Changes to the README or LICENSE alone don't make a release. Re-running the
+# workflow for the same commit repairs that release instead of making a new one.
 name: Build and release Download Keep-Awake
 
 on:
   push:
     branches: [main, master]
+    paths-ignore: ["**.md", "LICENSE"]
   pull_request:
   workflow_dispatch:
 
@@ -31,21 +34,38 @@ jobs:
         with:
           go-version: "1.22"
 
-      - name: Check whether this version is new
+      - name: Pick the version number
         id: ver
         shell: bash
         run: |
-          V=$(tr -d ' \r\n' < VERSION)
-          if ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::VERSION must look like 1.2.3 (found \"$V\")"; exit 1
-          fi
-          echo "version=$V" >> "$GITHUB_OUTPUT"
+          valid() { [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; }
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "skip_publish=true" >> "$GITHUB_OUTPUT"
-          elif gh release view "v$V" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "SHA256SUMS.txt"; then
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::Version $V is already released. Raise VERSION to publish an update."
+            echo "version=0.0.0" >> "$GITHUB_OUTPUT"; echo "skip_publish=true" >> "$GITHUB_OUTPUT"; exit 0
           fi
+          RELEASES=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[] | select(.draft|not) | "\(.tag_name) \(.target_commitish)"' 2>/dev/null || true)
+
+          # This exact commit already released? Reuse its number (and repair it if files are missing).
+          SAME=$(echo "$RELEASES" | awk -v sha="$GITHUB_SHA" '$2==sha {print $1; exit}')
+          if [ -n "$SAME" ]; then
+            V=${SAME#v}
+            if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$SAME" --jq '.assets[].name' | grep -qx "SHA256SUMS.txt"; then
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              echo "::notice::This commit is already released as $SAME."
+            fi
+          else
+            LAST=$(echo "$RELEASES" | awk '{print $1}' | sed 's/^v//' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+            if [ -n "$LAST" ]; then
+              IFS=. read -r MA MI PA <<< "$LAST"; NEXT="$MA.$MI.$((PA+1))"
+            else
+              NEXT="1.0.0"
+            fi
+            FLOOR=$(tr -d ' \r\n' < VERSION 2>/dev/null || true)
+            V=$NEXT
+            if valid "$FLOOR" && [ "$(printf '%s\n%s\n' "$FLOOR" "$NEXT" | sort -V | tail -1)" = "$FLOOR" ]; then V=$FLOOR; fi
+          fi
+          valid "$V" || { echo "::error::Couldn't work out a version number (got \"$V\")"; exit 1; }
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Version: $V"
 
       - name: Check the code
         if: steps.ver.outputs.skip != 'true'
@@ -85,7 +105,9 @@ jobs:
           else
             gh release create "v$V" $FILES --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
               --title "Download Keep-Awake $V" \
-              --notes "Download **DownloadKeepAwake.exe** and run it (use **DownloadKeepAwake-arm64.exe** on Snapdragon/ARM PCs). Installed copies of Download Keep-Awake update themselves."
+              --notes "$(git log -1 --pretty=%s "$GITHUB_SHA")
+
+          New install: download **DownloadKeepAwake.exe** and run it (**DownloadKeepAwake-arm64.exe** on Snapdragon/ARM PCs). Already installed: right-click the tray icon → **Update now**."
           fi
 
       - name: Confirm the release is complete

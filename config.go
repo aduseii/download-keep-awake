@@ -13,7 +13,7 @@ import (
 	"unsafe"
 )
 
-const currentConfigVersion = 3
+const currentConfigVersion = 4
 
 type Config struct {
 	Help          string `json:"_help"`
@@ -48,7 +48,8 @@ const configHelp = "The PC stays awake while ANY of the enabled detectors sees a
 	"detectPartialFiles: in-progress download files (e.g. .crdownload, .part) still growing in watchFolders (%DOWNLOADS% = your Downloads folder). " +
 	"detectApps: the download manager programs in downloadManagers moving more than minSpeedKBps (see Task Manager > Details for names). " +
 	"graceSeconds: how long to stay awake after downloading stops or stalls. keepScreenOn: also keep the display on. " +
-	"checkForUpdates / autoInstallUpdates: look for new versions on GitHub every 6 hours and install them automatically (never during a download). " +
+	"checkForUpdates: look for new versions on GitHub at start and every 6 hours and download them in the background. " +
+	"autoInstallUpdates: install them without asking (otherwise click Update now in the tray menu). " +
 	"Save this file and changes apply within a few seconds."
 
 func defaultDownloadManagers() []string {
@@ -100,7 +101,7 @@ func defaultConfig() Config {
 		Notifications:    true,
 
 		CheckForUpdates:    true,
-		AutoInstallUpdates: true,
+		AutoInstallUpdates: false, // updates download quietly; you click "Update now"
 	}
 }
 
@@ -135,8 +136,12 @@ func (c *Config) migrate() bool {
 	if c.ConfigVersion >= currentConfigVersion {
 		return false
 	}
+	if c.ConfigVersion < 4 {
+		// From 1.4 updates wait for you to click "Update now" instead of installing by themselves.
+		c.AutoInstallUpdates = false
+	}
 	if c.ConfigVersion >= 2 {
-		c.ConfigVersion = currentConfigVersion // v2 -> v3 only added update settings (defaults on)
+		c.ConfigVersion = currentConfigVersion
 		return true
 	}
 	// v1 only had download managers: keep the user's list and add any new defaults.
