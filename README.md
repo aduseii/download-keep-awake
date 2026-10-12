@@ -31,13 +31,15 @@ The PC stays awake while **any** of these sees a download:
 
 | Detector | Catches | How |
 |---|---|---|
-| **Any download (network traffic)** | Everything: browsers, Steam / Epic / Xbox / Battle.net, torrents, Windows Update, cloud sync, download managers | Incoming traffic on your real network adapters (Wi-Fi, Ethernet, mobile) above **150 KB/s**, averaged over 15 seconds |
+| **Downloads in other apps (network traffic)** | Steam / Epic / Xbox / Battle.net, torrents, Windows Update, cloud sync, anything else | Incoming traffic on your real network adapters (Wi-Fi, Ethernet, mobile) staying above **150 KB/s** for most of a minute |
 | **Browser & torrent downloads** | Even slow downloads in Chrome, Edge, Brave, Opera, Firefox, qBittorrent, uTorrent, BitComet… | Unfinished download files still growing in your Downloads folder (`.crdownload`, `.part`, `.!qB`, `.!ut`…) |
 | **Download manager apps** | IDM, Free Download Manager, Neat DM, JDownloader, XDM, Motrix, EagleGet, uGet, FlashGet, aria2, Persepolis | The app's own data activity above 64 KB/s |
 
+**Browsing and streaming don't count.** Traffic that's mostly going into a browser or a social/streaming app (Chrome, Edge, Firefox, WhatsApp, Telegram, Discord, Spotify, Netflix, Crave and others; see `ignoreApps`) is treated as browsing, not downloading. Browser downloads are still caught through their unfinished files in your Downloads folder. A download also has to be steady: scrolling a feed or loading videos comes in bursts and isn't counted, while a real download holds its speed for most of a minute.
+
 Only downloading counts: uploading or torrent seeding doesn't keep your PC awake. VPN and virtual adapters are ignored so traffic isn't counted twice. After a download stops it waits 90 seconds before allowing sleep, so a short stall or a gap between files doesn't end the download. The screen can still turn off as normal.
 
-HD video streaming counts as downloading too. If you don't want that, raise `networkMinSpeedKBps` in Settings or turn off "Detect any download" in the tray menu.
+If a browser download is saved somewhere other than your Downloads folder, add that folder to `watchFolders` so it's still detected.
 
 ### Settings
 
@@ -45,9 +47,10 @@ HD video streaming counts as downloading too. If you don't want that, raise `net
 
 | Setting | What it does | Default |
 |---|---|---|
-| `detectNetwork` | Detect any download from any app via network traffic. | `true` |
+| `detectNetwork` | Detect downloads in other apps via network traffic. | `true` |
 | `networkMinSpeedKBps` | Incoming speed that counts as downloading. | `150` |
-| `networkWindowSeconds` | Speed is averaged over this many seconds, so brief bursts are ignored. | `15` |
+| `networkWindowSeconds` | The speed has to hold for 80% of this many seconds, so bursts from browsing are ignored. | `60` |
+| `ignoreApps` | Browsers and social/streaming apps whose traffic is browsing or watching, not downloading. | Chrome, Edge, Firefox, WhatsApp, … |
 | `detectPartialFiles` | Detect unfinished download files that are still growing. | `true` |
 | `watchFolders` | Folders to watch, plus two levels of subfolders. `%DOWNLOADS%` is your Downloads folder wherever it is. Add your torrent or game download folders if they're elsewhere. | `["%DOWNLOADS%"]` |
 | `partialExtensions` | File endings that mean "still downloading". | `.crdownload`, `.part`, `.!qB`, … |
