@@ -13,16 +13,17 @@ import (
 	"unsafe"
 )
 
-const currentConfigVersion = 4
+const currentConfigVersion = 5
 
 type Config struct {
 	Help          string `json:"_help"`
 	ConfigVersion int    `json:"configVersion"`
 
 	// 1. Any download over the network (browsers, Steam, Windows Update, torrents...)
-	DetectNetwork        bool    `json:"detectNetwork"`
-	NetworkMinSpeedKBps  float64 `json:"networkMinSpeedKBps"`
-	NetworkWindowSeconds int     `json:"networkWindowSeconds"`
+	DetectNetwork        bool     `json:"detectNetwork"`
+	NetworkMinSpeedKBps  float64  `json:"networkMinSpeedKBps"`
+	NetworkWindowSeconds int      `json:"networkWindowSeconds"`
+	IgnoreApps           []string `json:"ignoreApps"`
 
 	// 2. In-progress download files in your Downloads folder (and others you add)
 	DetectPartialFiles bool     `json:"detectPartialFiles"`
@@ -44,7 +45,8 @@ type Config struct {
 }
 
 const configHelp = "The PC stays awake while ANY of the enabled detectors sees a download. " +
-	"detectNetwork: any app downloading faster than networkMinSpeedKBps (averaged over networkWindowSeconds). " +
+	"detectNetwork: other apps (games, torrents, Windows Update...) downloading faster than networkMinSpeedKBps for most of networkWindowSeconds. " +
+	"ignoreApps: browsers and social/streaming apps whose traffic is browsing, not downloading (their downloads are caught by detectPartialFiles). " +
 	"detectPartialFiles: in-progress download files (e.g. .crdownload, .part) still growing in watchFolders (%DOWNLOADS% = your Downloads folder). " +
 	"detectApps: the download manager programs in downloadManagers moving more than minSpeedKBps (see Task Manager > Details for names). " +
 	"graceSeconds: how long to stay awake after downloading stops or stalls. keepScreenOn: also keep the display on. " +
@@ -69,13 +71,29 @@ func defaultDownloadManagers() []string {
 	}
 }
 
+// Browsers and social/streaming apps. Network traffic that's mostly theirs is
+// browsing or watching, not downloading. Browser downloads are still detected
+// through their .crdownload/.part files in the Downloads folder.
+func defaultIgnoreApps() []string {
+	return []string{
+		"chrome", "msedge", "firefox", "brave", "opera", "opera_gx", "vivaldi", "arc",
+		"iexplore", "msedgewebview2", "chromium", "yandex", "zen", "waterfox", "librewolf",
+		"WhatsApp", "WhatsApp.Root", "Telegram", "Discord", "Signal", "Messenger",
+		"Instagram", "TikTok", "Facebook", "Snapchat", "Twitter", "X",
+		"Spotify", "Netflix", "Teams", "ms-teams", "Zoom", "Skype",
+		"vlc", "mpv", "PotPlayerMini64", "PotPlayerMini", "mpc-hc64", "Video.UI", "Microsoft.Media.Player",
+		"Crave",
+	}
+}
+
 func defaultConfig() Config {
 	return Config{
 		Help:                 configHelp,
 		ConfigVersion:        currentConfigVersion,
 		DetectNetwork:        true,
 		NetworkMinSpeedKBps:  150,
-		NetworkWindowSeconds: 15,
+		NetworkWindowSeconds: 60,
+		IgnoreApps:           defaultIgnoreApps(),
 		DetectPartialFiles:   true,
 		WatchFolders:         []string{"%DOWNLOADS%"},
 		PartialExtensions: []string{
@@ -135,6 +153,10 @@ func (c *Config) sanitise() {
 func (c *Config) migrate() bool {
 	if c.ConfigVersion >= currentConfigVersion {
 		return false
+	}
+	if c.ConfigVersion < 5 && c.NetworkWindowSeconds == 15 {
+		// 1.4.1: downloads must hold up for most of a minute, so browsing bursts don't count.
+		c.NetworkWindowSeconds = 60
 	}
 	if c.ConfigVersion < 4 {
 		// From 1.4 updates wait for you to click "Update now" instead of installing by themselves.

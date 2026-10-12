@@ -64,7 +64,11 @@ type app struct {
 	cfgPath         string
 	cfgMod          time.Time
 	apps            *ioMonitor
+	media           *ioMonitor // browsers and social/streaming apps, to tell browsing apart from downloads
 	net             *netMonitor
+	netSustain      sustainTracker
+	appSustain      sustainTracker
+	browsingNote    string
 	files           *partialMonitor
 	lastActive      time.Time
 	lastReason      string
@@ -146,6 +150,7 @@ func main() {
 	a.cfg = cfg
 	a.cfgMod = modTime(a.cfgPath)
 	a.apps = newIOMonitor()
+	a.media = newIOMonitor()
 	a.net = newNetMonitor()
 	a.files = newPartialMonitor()
 	a.status = "Starting..."
@@ -285,11 +290,24 @@ func tick() {
 	now := time.Now()
 
 	// Always sample the network so the speed shown in the menu stays accurate
-	// and the averaging window is already full when detection is switched on.
-	netAvg, netNow := a.net.poll(time.Duration(c.NetworkWindowSeconds) * time.Second)
+	// and the window is already full when detection is switched on.
+	window := time.Duration(c.NetworkWindowSeconds) * time.Second
+	_, netNow := a.net.poll(window)
+
+	// Traffic that's mostly coming into a browser or a social/streaming app is
+	// browsing or watching, not a download. (Browser downloads are still caught
+	// by the Downloads-folder detector, which sees the .crdownload/.part file.)
+	threshold := c.NetworkMinSpeedKBps * 1024
+	mediaRunning, mediaBps := a.media.poll(c.IgnoreApps)
+	fromMedia := len(mediaRunning) > 0 && netNow > 0 && mediaBps >= 0.5*netNow
+	a.netSustain.add(now, netNow >= threshold && !fromMedia, window)
+	a.browsingNote = ""
+	if netNow >= threshold && fromMedia {
+		a.browsingNote = mediaRunning[0] + " traffic isn't counted"
+	}
 
 	var reasons []string
-	if c.DetectNetwork && netAvg >= c.NetworkMinSpeedKBps*1024 {
+	if frac, full := a.netSustain.fraction(now, window); c.DetectNetwork && full && frac >= 0.8 {
 		reasons = append(reasons, "downloading at "+formatSpeed(netNow))
 	}
 	if c.DetectPartialFiles {
@@ -302,9 +320,13 @@ func tick() {
 		}
 	}
 	if c.DetectApps {
+		// Steady activity only: some download managers (IDM, for one) chatter
+		// with the browser on video-heavy sites without downloading anything.
 		running, bps := a.apps.poll(c.DownloadManagers)
-		if len(running) > 0 && bps >= c.MinSpeedKBps*1024 {
-			reasons = append(reasons, strings.Join(running, ", ")+" active")
+		const appWindow = 15 * time.Second
+		a.appSustain.add(now, len(running) > 0 && bps >= c.MinSpeedKBps*1024, appWindow)
+		if frac, full := a.appSustain.fraction(now, appWindow); full && frac >= 0.6 && len(running) > 0 {
+			reasons = append(reasons, strings.Join(running, ", ")+" downloading")
 		}
 	}
 
@@ -332,6 +354,9 @@ func tick() {
 	case !c.DetectNetwork && !c.DetectPartialFiles && !c.DetectApps:
 		next = stIdle
 		a.status = "All detection is switched off - normal sleep allowed"
+	case a.browsingNote != "":
+		next = stIdle
+		a.status = "Idle - browsing/streaming (" + a.browsingNote + ")"
 	default:
 		next = stIdle
 		a.status = "Idle - no downloads (network " + formatSpeed(netNow) + ")"
@@ -499,7 +524,7 @@ func showMenu() {
 		procSetMenuDefaultItem.Call(m, menuInstallUpdate, 0) // bold, so it stands out
 	}
 	sep()
-	add(menuDetectNetwork, "Detect any download (network traffic)", checked(a.cfg.DetectNetwork))
+	add(menuDetectNetwork, "Detect downloads in other apps (games, torrents, updates)", checked(a.cfg.DetectNetwork))
 	add(menuDetectFiles, "Detect browser && torrent downloads (Downloads folder)", checked(a.cfg.DetectPartialFiles))
 	add(menuDetectApps, "Detect download manager apps", checked(a.cfg.DetectApps))
 	sep()
