@@ -1,125 +1,112 @@
 <p align="center"><img src="assets/icon.png" width="96" alt=""></p>
 
-<h1 align="center">Download Keep-Awake</h1>
+# Download Keep-Awake
 
-<p align="center">A tiny Windows 11 / 10 tray app that stops your PC from sleeping or hibernating <b>while anything is downloading</b> — and gives your normal sleep settings back the moment it's done.</p>
-
----
-
-## Why
-
-Windows' sleep timer doesn't know you're halfway through a 20 GB download. Turning sleep off entirely means your PC stays on all night after the download finishes. Download Keep-Awake sits in the system tray and blocks sleep **only while data is actually downloading** — from any app.
-
-## What it detects
-
-The PC stays awake while **any** of these sees a download (each can be switched on/off from the tray menu):
-
-| Detector | Catches | How |
-|---|---|---|
-| **Any download (network traffic)** | Everything: browsers, Steam / Epic / Xbox / Battle.net, torrents, Windows Update, cloud sync, download managers | Incoming traffic on your real network adapters (Wi-Fi, Ethernet, mobile) above **150 KB/s**, averaged over 15 s |
-| **Browser & torrent downloads** | Even slow downloads in Chrome, Edge, Brave, Opera, Firefox, qBittorrent, uTorrent, BitComet… | In-progress files that are still growing in your Downloads folder (`.crdownload`, `.part`, `.!qB`, `.!ut`…) |
-| **Download manager apps** | IDM, Free Download Manager, Neat DM, JDownloader, XDM, Motrix, EagleGet, uGet, FlashGet, aria2, Persepolis | The app's own data activity above 64 KB/s |
-
-Only **downloading** counts — uploading or torrent seeding doesn't keep your PC awake. VPN, virtual-machine and loopback adapters are ignored so traffic isn't counted twice.
-
-## Features
-
-- **Automatic** – nothing to switch on or off; just leave it running.
-- **Stall-tolerant** – waits 90 seconds (configurable) after a download stops before allowing sleep, so a short stall or a gap between files doesn't end your download.
-- **Leaves your screen alone** – the display can still turn off as normal (optional setting to keep it on).
-- **Tray icon shows the state at a glance**
-  - 🟢 Green – keeping the PC awake for a download
-  - 🔵 Blue – kept awake manually ("Keep awake now")
-  - ⚪ Grey – idle, normal sleep allowed
-  - 🟠 Amber – paused
-- **Live status** in the tray menu: current download speed and what was detected.
-- **Notifications** when a download starts keeping the PC awake and when sleep is allowed again.
-- **Updates itself** – checks GitHub for new versions and installs them automatically (never in the middle of a download).
-- **Start with Windows**, **Pause** and **Keep awake now** in the tray menu.
-- **Single portable `.exe`**, ~6 MB, no installer, no admin rights, no .NET or other runtime needed.
-
-> **Streaming counts as downloading.** HD video streams above the 150 KB/s threshold keep the PC awake too (video players usually do that anyway). If you'd rather they didn't, raise `networkMinSpeedKBps` or switch off "Detect any download" and rely on the other two detectors.
+Download Keep-Awake is a small Windows 11 / 10 tray app that stops your PC from sleeping or hibernating **while anything is downloading**: browser downloads, download managers, Steam and other game launchers, torrents and Windows Update. When downloads finish, your normal sleep settings come back on their own.
 
 ## Install
 
-1. Download **`DownloadKeepAwake.exe`** from the [latest release](../../releases/latest).
-   (On a Snapdragon / ARM PC, use `DownloadKeepAwake-arm64.exe`.)
-2. Put it somewhere permanent, e.g. `C:\Users\<you>\Apps\DownloadKeepAwake.exe`.
-3. Double-click it. On first run it asks whether to start with Windows.
+1. Download **DownloadKeepAwake.exe** from the [latest release](../../releases/latest) (on Snapdragon / ARM PCs, use **DownloadKeepAwake-arm64.exe**).
+2. Run it. It installs itself for your Windows account (no admin needed) into `%LOCALAPPDATA%\Programs\Download Keep-Awake`, adds itself to the Start menu and to **Settings → Apps → Installed apps**, and starts in the system tray.
+3. On first run it asks whether to start with Windows.
 
-> **"Windows protected your PC"?** The app isn't code-signed yet, so SmartScreen may warn the first time. Click **More info → Run anyway**.
+The app isn't code-signed, so Windows SmartScreen warns on first install ("More info → Run anyway"). Updates install without that prompt.
 
-The round icon appears in the system tray (click the **^** next to the clock if it's hidden; you can drag it onto the taskbar to keep it visible).
+To remove it, uninstall **Download Keep-Awake** from **Settings → Apps → Installed apps** like any other app.
 
-## Settings
+## Using it
 
-Right-click the tray icon → **Settings…** opens `%APPDATA%\DownloadKeepAwake\config.json` in Notepad. Save the file and changes apply within a few seconds — no restart needed. The three detectors can also be toggled straight from the tray menu.
+The round icon in the system tray (click **^** next to the clock if it's hidden) shows what it's doing:
+
+- **Green**: something is downloading, so the PC is kept awake.
+- **Grey**: nothing is downloading, so normal sleep applies.
+- **Blue**: kept awake by hand (**Keep awake now** in the menu).
+- **Amber**: paused (**Pause** in the menu).
+
+Right-click it to see the current download speed and what was detected, switch each detector on or off, pause it, or open Settings.
+
+### What counts as a download
+
+The PC stays awake while **any** of these sees a download:
+
+| Detector | Catches | How |
+|---|---|---|
+| **Any download (network traffic)** | Everything: browsers, Steam / Epic / Xbox / Battle.net, torrents, Windows Update, cloud sync, download managers | Incoming traffic on your real network adapters (Wi-Fi, Ethernet, mobile) above **150 KB/s**, averaged over 15 seconds |
+| **Browser & torrent downloads** | Even slow downloads in Chrome, Edge, Brave, Opera, Firefox, qBittorrent, uTorrent, BitComet… | Unfinished download files still growing in your Downloads folder (`.crdownload`, `.part`, `.!qB`, `.!ut`…) |
+| **Download manager apps** | IDM, Free Download Manager, Neat DM, JDownloader, XDM, Motrix, EagleGet, uGet, FlashGet, aria2, Persepolis | The app's own data activity above 64 KB/s |
+
+Only downloading counts: uploading or torrent seeding doesn't keep your PC awake. VPN and virtual adapters are ignored so traffic isn't counted twice. After a download stops it waits 90 seconds before allowing sleep, so a short stall or a gap between files doesn't end the download. The screen can still turn off as normal.
+
+HD video streaming counts as downloading too. If you don't want that, raise `networkMinSpeedKBps` in Settings or turn off "Detect any download" in the tray menu.
+
+### Settings
+
+**Settings…** in the tray menu opens `%APPDATA%\DownloadKeepAwake\config.json` in Notepad. Save it and changes apply within a few seconds.
 
 | Setting | What it does | Default |
 |---|---|---|
 | `detectNetwork` | Detect any download from any app via network traffic. | `true` |
 | `networkMinSpeedKBps` | Incoming speed that counts as downloading. | `150` |
 | `networkWindowSeconds` | Speed is averaged over this many seconds, so brief bursts are ignored. | `15` |
-| `detectPartialFiles` | Detect in-progress download files that are still growing. | `true` |
-| `watchFolders` | Folders to watch (and two levels of subfolders). `%DOWNLOADS%` = your Downloads folder, wherever it is. Add your torrent or Steam download folders here if they're elsewhere. | `["%DOWNLOADS%"]` |
+| `detectPartialFiles` | Detect unfinished download files that are still growing. | `true` |
+| `watchFolders` | Folders to watch, plus two levels of subfolders. `%DOWNLOADS%` is your Downloads folder wherever it is. Add your torrent or game download folders if they're elsewhere. | `["%DOWNLOADS%"]` |
 | `partialExtensions` | File endings that mean "still downloading". | `.crdownload`, `.part`, `.!qB`, … |
 | `detectApps` | Detect download manager programs. | `true` |
-| `downloadManagers` | Programs to watch. Find the name in **Task Manager → Details** (`.exe` is optional). | see table above |
+| `downloadManagers` | Programs to watch. Find the name in **Task Manager → Details** (`.exe` is optional). | see above |
 | `minSpeedKBps` | Activity from those programs that counts as downloading. | `64` |
 | `graceSeconds` | How long to stay awake after a download stops or stalls. | `90` |
 | `checkSeconds` | How often to check. | `3` |
-| `keepScreenOn` | Also stop the display from turning off while downloading. | `false` |
+| `keepScreenOn` | Also keep the display on while downloading. | `false` |
 | `notifications` | Show a notification when keep-awake starts and stops. | `true` |
-| `checkForUpdates` | Look for a new version on GitHub 30 s after start and every 6 hours. | `true` |
-| `autoInstallUpdates` | Install new versions automatically. When off, you get a notification and install from the tray menu. | `true` |
+| `checkForUpdates` | Look for a new version on launch and every 6 hours. | `true` |
+| `autoInstallUpdates` | Install new versions by themselves. When off, you're asked first. | `true` |
 
-Upgrading from an older version? Your existing settings are kept and the new options are added automatically.
+## How updates work
 
-## How it works
+Every time files change in this repository, GitHub builds the app (the **Build and release Download Keep-Awake** workflow under the **Actions** tab) and publishes it on the **Releases** page. Installed copies check that page shortly after launch and every six hours, and download the new version quietly. The download is checked against `SHA256SUMS.txt` from the same release; anything that doesn't match is thrown away.
 
-Every few seconds the app reads Windows' network adapter counters (`GetIfTable2`), scans your Downloads folder for growing partial files, and reads the I/O counters of known download managers. If any of them shows a download, it tells Windows the system is in use via [`SetThreadExecutionState`](https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-setthreadexecutionstate) (`ES_SYSTEM_REQUIRED`) — the same mechanism video players and installers use. When nothing has been downloading for `graceSeconds`, it releases that request and Windows' own sleep timer takes over again.
+- If nothing is downloading, the update installs straight away: the app restarts in about a second and shows **"Updated to x.y.z"**.
+- If something is downloading, it shows **"Download Keep-Awake x.y.z is ready · Click here to restart now"** and otherwise installs by itself when your downloads finish. It also installs the next time the app closes.
 
-It prevents **automatic idle** sleep and hibernation. It deliberately does *not* override you: choosing Sleep from the Start menu, closing a laptop lid, or critical-battery hibernation still work as usual. You can see it working with `powercfg /requests` in an admin terminal.
+You can also use **Check for updates** in the tray menu.
 
-## Automatic updates
+A build only publishes when the number in `VERSION` is higher than the last release. Each change should raise it: `1.3.0` → `1.3.1` for fixes, `1.4.0` for new features.
 
-The app keeps itself up to date from this repository's [Releases](../../releases):
+### Publishing a change from the GitHub website
 
-1. 30 seconds after starting, and every 6 hours after that, it asks GitHub for the latest release.
-2. If there's a newer version, it downloads the `.exe` for your PC (x64 or ARM64) **next to the current one**.
-3. The download is checked against `SHA256SUMS.txt` from the same release. Anything that doesn't match is thrown away.
-4. As soon as nothing is downloading, it swaps the new `.exe` in, restarts itself in about a second and shows an **"Updated to vX.Y.Z"** notification. If something is downloading, it waits until the download is done.
+1. Open the repository, click **Add file → Upload files**, and drop in the changed files, keeping their folders. Include `VERSION` with the new number.
+2. Click **Commit changes**.
+3. Open the **Actions** tab. The build takes about 2 minutes. A green tick means the new version is on the Releases page and installed copies will pick it up.
 
-You can also use **Check for updates** in the tray menu, or untick **Install updates automatically** to be asked first.
+If a build fails, open it in the Actions tab; the red step shows what went wrong.
 
-For updates to work, keep the `.exe` in a folder you can write to (e.g. `Documents`, `%LOCALAPPDATA%\Programs`), not in `C:\Program Files`. The repository must be public so the app can see its releases.
+## Building on your own computer (optional)
 
-## Uninstall
-
-Right-click the tray icon → untick **Start with Windows** → **Exit**, then delete the `.exe` and the `%APPDATA%\DownloadKeepAwake` folder.
-
-## Building from source
-
-Requires [Go](https://go.dev/dl/) 1.22+. No other dependencies — it talks to the Windows API directly.
+You need [Go](https://go.dev/dl/) 1.22 or newer. Nothing else: the app talks to Windows directly.
 
 ```sh
-# Windows
-go build -trimpath -ldflags "-s -w -H windowsgui" -o DownloadKeepAwake.exe .
-
-# Cross-compile from Linux / macOS
-GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "-s -w -H windowsgui" -o DownloadKeepAwake.exe .
+go build -trimpath -ldflags "-s -w -H windowsgui -X main.version=1.3.0" -o DownloadKeepAwake.exe .
 ```
 
-The icon and manifest are embedded from the committed `rsrc_windows_*.syso` files. If you change `assets/icon.ico` or `assets/app.manifest`, regenerate them with `go install github.com/akavel/rsrc@latest` then `go generate`.
+From Linux or macOS, put `GOOS=windows GOARCH=amd64` in front. To try a build without it installing itself, run it with `--portable`.
 
-### Releasing
+## Where things live
 
-Push a version tag and GitHub Actions builds both executables, publishes a release, and **every installed copy updates itself within 6 hours**:
+- `main.go` runs the tray icon, menu and the decision to keep the PC awake.
+- `netmon.go` measures download speed on your network adapters.
+- `partial.go` watches for unfinished download files.
+- `monitor.go` watches download manager programs.
+- `config.go` reads and writes `config.json` and the **Start with Windows** setting.
+- `update.go` checks the Releases page, downloads, verifies and installs updates.
+- `install.go` installs per-user, adds the Start menu shortcut and the Installed apps entry, and uninstalls.
+- `icon.go` draws the coloured tray icons; `assets/icon.ico` and `assets/icon.png` are the app icon.
+- `rsrc_windows_*.syso` embed the icon and Windows manifest into the `.exe`. If you change `assets/icon.ico` or `assets/app.manifest`, regenerate them with `go install github.com/akavel/rsrc@latest` then `go generate`.
+- `.github/workflows/release.yml` is the automatic build.
 
-```sh
-git tag v1.0.0
-git push origin v1.0.0
-```
+## Notes
+
+- It blocks **automatic** sleep and hibernation only, using the same Windows mechanism as video players (`SetThreadExecutionState`). Choosing Sleep from the Start menu, closing a laptop lid and critical-battery hibernation still work as usual. `powercfg /requests` in an admin terminal shows it while it's keeping the PC awake.
+- Settings live in `%APPDATA%\DownloadKeepAwake` and are kept if you uninstall.
 
 ## License
 

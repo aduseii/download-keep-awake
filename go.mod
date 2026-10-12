@@ -1,3 +1,3 @@
-module github.com/konohafiles/download-keep-awake
+module github.com/aduseii/download-keep-awake
 
 go 1.22

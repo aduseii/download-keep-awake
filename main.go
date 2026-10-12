@@ -16,10 +16,10 @@ import (
 	"unsafe"
 )
 
-var version = "1.2.0" // overridden at build time with -ldflags "-X main.version=..."
+var version = "1.3.0" // overridden at build time with -ldflags "-X main.version=..."
 
 // repoURL is set at build time by the GitHub workflow to this repository's page.
-var repoURL = "https://github.com/konohafiles/download-keep-awake"
+var repoURL = "https://github.com/aduseii/download-keep-awake"
 
 const (
 	appName       = "Download Keep-Awake"
@@ -119,6 +119,15 @@ func releaseSingleInstance() {
 }
 
 func main() {
+	if hasFlag(uninstallFlag) {
+		uninstall()
+		return
+	}
+	// Started from Downloads (or anywhere else)? Install per-user and run the installed copy.
+	if maybeInstall() {
+		return
+	}
+
 	prevVersion, justUpdated := updatedFrom()
 	if !acquireSingleInstance(justUpdated) {
 		if !justUpdated {
@@ -151,9 +160,12 @@ func main() {
 		stPaused:      makeIcon(size, colorPaused),
 	}
 	addTrayIcon()
+	if runningFromInstallDir() {
+		registerInstall()
+	}
 
 	if firstRun {
-		if messageBox(appName+" is now running in your system tray.\n\n"+
+		if messageBox(appName+" is installed and running in your system tray. You'll also find it in the Start menu.\n\n"+
 			"Whenever something is downloading (browser downloads, download managers, Steam and other game launchers, "+
 			"torrents, Windows Update...), your PC won't go to sleep or hibernate. "+
 			"When downloads finish, your normal sleep settings come back automatically.\n\n"+
@@ -221,6 +233,10 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		switch uint32(lParam & 0xFFFF) {
 		case WM_RBUTTONUP, WM_LBUTTONUP:
 			showMenu()
+		case NIN_BALLOONUSERCLICK:
+			if stagedUpdate != nil { // "x.y.z is ready - click to restart now"
+				installStagedUpdate()
+			}
 		}
 		return 0
 	case WM_TIMER:
@@ -238,9 +254,11 @@ func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
 		if wParam != 0 {
 			setAwake(false, false)
 			removeTrayIcon()
+			installOnExit()
 		}
 		return 0
 	case WM_DESTROY:
+		installOnExit() // a ready update installs when the app closes, like Crave
 		procKillTimer.Call(hwnd, timerID)
 		procKillTimer.Call(hwnd, updateTimerID)
 		setAwake(false, false)

@@ -1,18 +1,29 @@
-name: Build & Release
+# Builds the Windows app on GitHub's machines and publishes it as a Release.
+# Installed copies of Download Keep-Awake watch this repository's Releases and update themselves.
+#
+# It runs whenever files change on the main branch. If VERSION still has a version
+# that's already fully released, it stops early; raise VERSION to publish an update.
+# A release that's missing files (for example after a failed upload) is repaired.
+name: Build and release Download Keep-Awake
 
 on:
   push:
-    branches: [main]
-    tags: ["v*"]
+    branches: [main, master]
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
-  build:
+  release:
     runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -20,40 +31,70 @@ jobs:
         with:
           go-version: "1.22"
 
-      - name: Work out version
+      - name: Check whether this version is new
         id: ver
+        shell: bash
         run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-          else
-            echo "version=0.0.0-dev+${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          V=$(tr -d ' \r\n' < VERSION)
+          if ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::VERSION must look like 1.2.3 (found \"$V\")"; exit 1
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "skip_publish=true" >> "$GITHUB_OUTPUT"
+          elif gh release view "v$V" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "SHA256SUMS.txt"; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Version $V is already released. Raise VERSION to publish an update."
           fi
 
-      - name: Vet
-        run: GOOS=windows GOARCH=amd64 go vet ./...
+      - name: Check the code
+        if: steps.ver.outputs.skip != 'true'
+        run: |
+          GOOS=windows GOARCH=amd64 go vet ./...
+          GOOS=windows GOARCH=arm64 go vet ./...
 
-      - name: Build Windows executables
+      - name: Build v${{ steps.ver.outputs.version }}
+        if: steps.ver.outputs.skip != 'true'
+        shell: bash
         env:
           CGO_ENABLED: "0"
           GOOS: windows
         run: |
+          V="${{ steps.ver.outputs.version }}"
+          LDFLAGS="-s -w -H windowsgui -X main.version=$V -X main.repoURL=https://github.com/$GITHUB_REPOSITORY"
           mkdir -p dist
-          LDFLAGS="-s -w -H windowsgui -X main.version=${{ steps.ver.outputs.version }} -X main.repoURL=${{ github.server_url }}/${{ github.repository }}"
           GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o dist/DownloadKeepAwake.exe .
           GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" -o dist/DownloadKeepAwake-arm64.exe .
-          cd dist && sha256sum *.exe > SHA256SUMS.txt && cat SHA256SUMS.txt
+          cd dist && sha256sum DownloadKeepAwake.exe DownloadKeepAwake-arm64.exe > SHA256SUMS.txt && cat SHA256SUMS.txt && ls -l
 
       - uses: actions/upload-artifact@v4
+        if: steps.ver.outputs.skip != 'true'
         with:
           name: DownloadKeepAwake-${{ steps.ver.outputs.version }}
           path: dist/*
 
-      - name: Publish GitHub release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/DownloadKeepAwake.exe
-            dist/DownloadKeepAwake-arm64.exe
-            dist/SHA256SUMS.txt
-          generate_release_notes: true
+      - name: Publish v${{ steps.ver.outputs.version }}
+        if: steps.ver.outputs.skip != 'true' && steps.ver.outputs.skip_publish != 'true'
+        shell: bash
+        run: |
+          V="${{ steps.ver.outputs.version }}"
+          cd dist
+          FILES="DownloadKeepAwake.exe DownloadKeepAwake-arm64.exe SHA256SUMS.txt"
+          if gh release view "v$V" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "v$V" $FILES --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "v$V" $FILES --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+              --title "Download Keep-Awake $V" \
+              --notes "Download **DownloadKeepAwake.exe** and run it (use **DownloadKeepAwake-arm64.exe** on Snapdragon/ARM PCs). Installed copies of Download Keep-Awake update themselves."
+          fi
+
+      - name: Confirm the release is complete
+        if: steps.ver.outputs.skip != 'true' && steps.ver.outputs.skip_publish != 'true'
+        shell: bash
+        run: |
+          V="${{ steps.ver.outputs.version }}"
+          NAMES=$(gh release view "v$V" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[] | "\(.name) \(.size)"')
+          echo "$NAMES"
+          for f in DownloadKeepAwake.exe DownloadKeepAwake-arm64.exe SHA256SUMS.txt; do
+            echo "$NAMES" | grep -q "^$f " || { echo "::error::$f did not reach the release"; exit 1; }
+          done

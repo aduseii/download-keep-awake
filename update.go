@@ -331,6 +331,9 @@ func handleUpdateResult() {
 		stagedUpdate = res
 		if res.manual || canInstallNow() {
 			installStagedUpdate()
+		} else {
+			notify(fmt.Sprintf("%s %s is ready", appName, res.release.Tag),
+				"Click here to restart now. Otherwise it installs by itself when your downloads finish.")
 		}
 	}
 }
@@ -372,7 +375,11 @@ func swapAndRestart(staged string) error {
 	// version, then quit. The new version deletes the .old file.
 	releaseSingleInstance()
 	removeTrayIcon()
-	cmd := exec.Command(exe, updatedFlag+"="+version)
+	args := []string{updatedFlag + "=" + version}
+	if hasFlag(portableFlag) {
+		args = append(args, portableFlag)
+	}
+	cmd := exec.Command(exe, args...)
 	cmd.Dir = filepath.Dir(exe)
 	if err := cmd.Start(); err != nil {
 		// roll back so the user still has a working app
@@ -385,6 +392,28 @@ func swapAndRestart(staged string) error {
 	setAwake(false, false)
 	procDestroyWindow.Call(a.hwnd)
 	return nil
+}
+
+// installOnExit swaps in a downloaded update when the app closes without
+// restarting it; the new version runs the next time the app starts.
+func installOnExit() {
+	res := stagedUpdate
+	if res == nil || res.staged == "" {
+		return
+	}
+	stagedUpdate = nil
+	exe, err := exePath()
+	if err != nil {
+		return
+	}
+	old := exe + ".old"
+	os.Remove(old)
+	if os.Rename(exe, old) != nil {
+		return
+	}
+	if os.Rename(res.staged, exe) != nil {
+		os.Rename(old, exe)
+	}
 }
 
 // cleanupAfterUpdate removes leftovers from a previous update.
