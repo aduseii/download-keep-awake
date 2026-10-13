@@ -2,7 +2,7 @@
 
 # Download Keep-Awake
 
-Download Keep-Awake is a small Windows 11 / 10 tray app that stops your PC from sleeping or hibernating **while anything is downloading**: browser downloads, download managers, Steam and other game launchers, torrents and Windows Update. When downloads finish, your normal sleep settings come back on their own.
+Download Keep-Awake is a small Windows 11 / 10 tray app that stops your PC from sleeping or hibernating **while Microsoft Edge, Free Download Manager or a game launcher is downloading**. When downloads finish, your normal sleep settings come back on their own. Nothing else (browsing, social media, streaming, other apps) keeps your PC awake.
 
 ## Install
 
@@ -27,19 +27,17 @@ Right-click it to see the current download speed and what was detected, switch e
 
 ### What counts as a download
 
-The PC stays awake while **any** of these sees a download:
+Only these three, each of which can be switched on or off in the tray menu:
 
-| Detector | Catches | How |
-|---|---|---|
-| **Downloads in other apps (network traffic)** | Steam / Epic / Xbox / Battle.net, torrents, Windows Update, cloud sync, anything else | Incoming traffic on your real network adapters (Wi-Fi, Ethernet, mobile) staying above **150 KB/s** for most of a minute |
-| **Browser & torrent downloads** | Even slow downloads in Chrome, Edge, Brave, Opera, Firefox, qBittorrent, uTorrent, BitComet… | Unfinished download files still growing in your Downloads folder (`.crdownload`, `.part`, `.!qB`, `.!ut`…) |
-| **Download manager apps** | IDM, Free Download Manager, Neat DM, JDownloader, XDM, Motrix, EagleGet, uGet, FlashGet, aria2, Persepolis | The app's own data activity above 64 KB/s |
+| Source | How it's detected |
+|---|---|
+| **Microsoft Edge** | While Edge is open, an unfinished download file (`.crdownload`) that's still growing. Edge's own download folder (Settings → Downloads → Location) is found automatically, along with your Windows Downloads folder. |
+| **Free Download Manager** | FDM's own data activity staying above 64 KB/s for most of 15 seconds. |
+| **Game launchers** | The same, for Steam, Epic Games, Xbox app, EA app, Battle.net, Ubisoft Connect, GOG Galaxy, Riot Client, Amazon Games, Rockstar Games Launcher and itch.io. Their built-in store pages (steamwebhelper and the like) don't count, so watching a trailer won't keep the PC awake. |
 
-**Browsing and streaming don't count.** Traffic that's mostly going into a browser or a social/streaming app (Chrome, Edge, Firefox, WhatsApp, Telegram, Discord, Spotify, Netflix, Crave and others; see `ignoreApps`) is treated as browsing, not downloading. Browser downloads are still caught through their unfinished files in your Downloads folder. A download also has to be steady: scrolling a feed or loading videos comes in bursts and isn't counted, while a real download holds its speed for most of a minute.
+After a download stops, the app waits 90 seconds before allowing sleep, so a short stall or a gap between files doesn't end the download. The screen can still turn off as normal.
 
-Only downloading counts: uploading or torrent seeding doesn't keep your PC awake. VPN and virtual adapters are ignored so traffic isn't counted twice. After a download stops it waits 90 seconds before allowing sleep, so a short stall or a gap between files doesn't end the download. The screen can still turn off as normal.
-
-If a browser download is saved somewhere other than your Downloads folder, add that folder to `watchFolders` so it's still detected.
+If Edge is set to **Ask me what to do with each download** and you save somewhere other than your Downloads folder or Edge's download folder, add that folder to `edgeFolders` in Settings.
 
 ### Settings
 
@@ -47,16 +45,13 @@ If a browser download is saved somewhere other than your Downloads folder, add t
 
 | Setting | What it does | Default |
 |---|---|---|
-| `detectNetwork` | Detect downloads in other apps via network traffic. | `true` |
-| `networkMinSpeedKBps` | Incoming speed that counts as downloading. | `150` |
-| `networkWindowSeconds` | The speed has to hold for 80% of this many seconds, so bursts from browsing are ignored. | `60` |
-| `ignoreApps` | Browsers and social/streaming apps whose traffic is browsing or watching, not downloading. | Chrome, Edge, Firefox, WhatsApp, … |
-| `detectPartialFiles` | Detect unfinished download files that are still growing. | `true` |
-| `watchFolders` | Folders to watch, plus two levels of subfolders. `%DOWNLOADS%` is your Downloads folder wherever it is. Add your torrent or game download folders if they're elsewhere. | `["%DOWNLOADS%"]` |
-| `partialExtensions` | File endings that mean "still downloading". | `.crdownload`, `.part`, `.!qB`, … |
-| `detectApps` | Detect download manager programs. | `true` |
-| `downloadManagers` | Programs to watch. Find the name in **Task Manager → Details** (`.exe` is optional). | see above |
-| `minSpeedKBps` | Activity from those programs that counts as downloading. | `64` |
+| `detectEdge` | Watch Microsoft Edge downloads. | `true` |
+| `edgeFolders` | Extra folders to watch for Edge downloads (plus two levels of subfolders). Edge's own download folder is always included. `%DOWNLOADS%` is your Windows Downloads folder. | `["%DOWNLOADS%"]` |
+| `detectFreeDownloadManager` | Watch Free Download Manager. | `true` |
+| `freeDownloadManagerProcesses` | FDM's program name in **Task Manager → Details**. | `["fdm"]` |
+| `detectGameLaunchers` | Watch game launchers. | `true` |
+| `gameLaunchers` | Launcher program names (from **Task Manager → Details**). Add one here if yours isn't listed. | Steam, Epic, Xbox, EA, … |
+| `minSpeedKBps` | Steady activity from FDM or a launcher that counts as downloading. | `64` |
 | `graceSeconds` | How long to stay awake after a download stops or stalls. | `90` |
 | `checkSeconds` | How often to check. | `3` |
 | `keepScreenOn` | Also keep the display on while downloading. | `false` |
@@ -82,7 +77,7 @@ If a build fails, open it in the Actions tab; the red step shows what went wrong
 You need [Go](https://go.dev/dl/) 1.22 or newer. Nothing else: the app talks to Windows directly.
 
 ```sh
-go build -trimpath -ldflags "-s -w -H windowsgui -X main.version=1.4.0" -o DownloadKeepAwake.exe .
+go build -trimpath -ldflags "-s -w -H windowsgui -X main.version=1.5.0" -o DownloadKeepAwake.exe .
 ```
 
 From Linux or macOS, put `GOOS=windows GOARCH=amd64` in front. To try a build without it installing itself, run it with `--portable`.
@@ -90,9 +85,8 @@ From Linux or macOS, put `GOOS=windows GOARCH=amd64` in front. To try a build wi
 ## Where things live
 
 - `main.go` runs the tray icon, menu and the decision to keep the PC awake.
-- `netmon.go` measures download speed on your network adapters.
-- `partial.go` watches for unfinished download files.
-- `monitor.go` watches download manager programs.
+- `edge.go` finds Edge's download folders; `partial.go` watches for its unfinished `.crdownload` files.
+- `monitor.go` measures how much data Free Download Manager and the game launchers are moving; `sustain.go` checks that it's steady.
 - `config.go` reads and writes `config.json` and the **Start with Windows** setting.
 - `update.go` checks the Releases page, downloads, verifies and installs updates.
 - `install.go` installs per-user, adds the Start menu shortcut and the Installed apps entry, and uninstalls.
@@ -104,6 +98,7 @@ From Linux or macOS, put `GOOS=windows GOARCH=amd64` in front. To try a build wi
 
 - It blocks **automatic** sleep and hibernation only, using the same Windows mechanism as video players (`SetThreadExecutionState`). Choosing Sleep from the Start menu, closing a laptop lid and critical-battery hibernation still work as usual. `powercfg /requests` in an admin terminal shows it while it's keeping the PC awake.
 - Settings live in `%APPDATA%\DownloadKeepAwake` and are kept if you uninstall.
+- Microsoft Store and some Xbox app downloads are carried out by a Windows background service rather than the Xbox app itself, so those may not always be noticed.
 
 ## License
 

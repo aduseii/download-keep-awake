@@ -84,6 +84,12 @@ const (
 	maxScanEntries = 20000
 )
 
+// reset forgets everything seen so far.
+func (m *partialMonitor) reset() {
+	m.prev = map[string]fileState{}
+	m.primed = false
+}
+
 // poll returns the names of partial download files that changed since the last scan.
 func (m *partialMonitor) poll(folders, extensions []string) []string {
 	exts := make([]string, 0, len(extensions))

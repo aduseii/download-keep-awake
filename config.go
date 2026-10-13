@@ -7,116 +7,110 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 	"unsafe"
 )
 
-const currentConfigVersion = 5
+const currentConfigVersion = 6
 
 type Config struct {
 	Help          string `json:"_help"`
 	ConfigVersion int    `json:"configVersion"`
 
-	// 1. Any download over the network (browsers, Steam, Windows Update, torrents...)
-	DetectNetwork        bool     `json:"detectNetwork"`
-	NetworkMinSpeedKBps  float64  `json:"networkMinSpeedKBps"`
-	NetworkWindowSeconds int      `json:"networkWindowSeconds"`
-	IgnoreApps           []string `json:"ignoreApps"`
+	// 1. Microsoft Edge downloads (unfinished .crdownload files)
+	DetectEdge  bool     `json:"detectEdge"`
+	EdgeFolders []string `json:"edgeFolders"`
 
-	// 2. In-progress download files in your Downloads folder (and others you add)
-	DetectPartialFiles bool     `json:"detectPartialFiles"`
-	WatchFolders       []string `json:"watchFolders"`
-	PartialExtensions  []string `json:"partialExtensions"`
+	// 2. Free Download Manager
+	DetectFDM    bool     `json:"detectFreeDownloadManager"`
+	FDMProcesses []string `json:"freeDownloadManagerProcesses"`
 
-	// 3. Download manager programs
-	DetectApps       bool     `json:"detectApps"`
-	DownloadManagers []string `json:"downloadManagers"`
-	MinSpeedKBps     float64  `json:"minSpeedKBps"`
+	// 3. Game launchers (Steam, Epic, Xbox, EA, Battle.net, Ubisoft, GOG, Riot, Amazon...)
+	DetectGameLaunchers bool     `json:"detectGameLaunchers"`
+	GameLaunchers       []string `json:"gameLaunchers"`
 
-	GraceSeconds  int  `json:"graceSeconds"`
-	CheckSeconds  int  `json:"checkSeconds"`
-	KeepScreenOn  bool `json:"keepScreenOn"`
-	Notifications bool `json:"notifications"`
+	MinSpeedKBps  float64 `json:"minSpeedKBps"`
+	GraceSeconds  int     `json:"graceSeconds"`
+	CheckSeconds  int     `json:"checkSeconds"`
+	KeepScreenOn  bool    `json:"keepScreenOn"`
+	Notifications bool    `json:"notifications"`
 
 	CheckForUpdates    bool `json:"checkForUpdates"`
 	AutoInstallUpdates bool `json:"autoInstallUpdates"`
 }
 
-const configHelp = "The PC stays awake while ANY of the enabled detectors sees a download. " +
-	"detectNetwork: other apps (games, torrents, Windows Update...) downloading faster than networkMinSpeedKBps for most of networkWindowSeconds. " +
-	"ignoreApps: browsers and social/streaming apps whose traffic is browsing, not downloading (their downloads are caught by detectPartialFiles). " +
-	"detectPartialFiles: in-progress download files (e.g. .crdownload, .part) still growing in watchFolders (%DOWNLOADS% = your Downloads folder). " +
-	"detectApps: the download manager programs in downloadManagers moving more than minSpeedKBps (see Task Manager > Details for names). " +
+const configHelp = "The PC stays awake only while one of these is downloading: " +
+	"detectEdge: Microsoft Edge (its unfinished .crdownload files in your Downloads folder, Edge's own download folder, and any edgeFolders you add; %DOWNLOADS% = your Downloads folder). " +
+	"detectFreeDownloadManager: Free Download Manager (freeDownloadManagerProcesses). " +
+	"detectGameLaunchers: the game launchers in gameLaunchers (program names from Task Manager > Details). " +
+	"minSpeedKBps: how much steady activity from FDM or a launcher counts as downloading. " +
 	"graceSeconds: how long to stay awake after downloading stops or stalls. keepScreenOn: also keep the display on. " +
 	"checkForUpdates: look for new versions on GitHub at start and every 6 hours and download them in the background. " +
 	"autoInstallUpdates: install them without asking (otherwise click Update now in the tray menu). " +
 	"Save this file and changes apply within a few seconds."
 
-func defaultDownloadManagers() []string {
+// Game launcher programs that download games themselves. Their built-in web
+// views (steamwebhelper, EpicWebHelper, UplayWebCore...) are left out on
+// purpose so store pages and trailers don't count.
+func defaultGameLaunchers() []string {
 	return []string{
-		"fdm",          // Free Download Manager
-		"IDMan",        // Internet Download Manager
-		"NeatDM",       // Neat Download Manager
-		"xdm-app",      // Xtreme Download Manager
-		"xdman",        // Xtreme Download Manager (older)
-		"JDownloader2", // JDownloader
-		"Motrix",       // Motrix
-		"EagleGet",     // EagleGet
-		"uget-gtk",     // uGet
-		"FlashGet",     // FlashGet
-		"aria2c",       // aria2
-		"persepolis",   // Persepolis
+		"steam", "steamservice", // Steam
+		"EpicGamesLauncher",           // Epic Games
+		"XboxPcApp", "GamingServices", // Xbox app / Microsoft Store games
+		"EADesktop", "EABackgroundService", // EA app
+		"Battle.net",            // Battle.net (its downloader "Agent" is watched while Battle.net runs)
+		"UbisoftConnect", "upc", // Ubisoft Connect
+		"GalaxyClient",       // GOG Galaxy
+		"RiotClientServices", // Riot Client
+		"Amazon Games",       // Amazon Games
+		"RockstarService",    // Rockstar Games Launcher (its "Launcher" is watched while it runs)
+		"itch",               // itch.io
 	}
 }
 
-// Browsers and social/streaming apps. Network traffic that's mostly theirs is
-// browsing or watching, not downloading. Browser downloads are still detected
-// through their .crdownload/.part files in the Downloads folder.
-func defaultIgnoreApps() []string {
-	return []string{
-		"chrome", "msedge", "firefox", "brave", "opera", "opera_gx", "vivaldi", "arc",
-		"iexplore", "msedgewebview2", "chromium", "yandex", "zen", "waterfox", "librewolf",
-		"WhatsApp", "WhatsApp.Root", "Telegram", "Discord", "Signal", "Messenger",
-		"Instagram", "TikTok", "Facebook", "Snapchat", "Twitter", "X",
-		"Spotify", "Netflix", "Teams", "ms-teams", "Zoom", "Skype",
-		"vlc", "mpv", "PotPlayerMini64", "PotPlayerMini", "mpc-hc64", "Video.UI", "Microsoft.Media.Player",
-		"Crave",
+// Downloaders with generic program names, watched only while their launcher runs.
+var launcherCompanions = map[string][]string{
+	"battle.net":      {"Agent"},
+	"rockstarservice": {"Launcher"},
+}
+
+var launcherNames = map[string]string{
+	"steam": "Steam", "steamservice": "Steam",
+	"epicgameslauncher": "Epic Games",
+	"xboxpcapp":         "Xbox app", "gamingservices": "Xbox app",
+	"eadesktop": "EA app", "eabackgroundservice": "EA app",
+	"battle.net": "Battle.net", "agent": "Battle.net",
+	"ubisoftconnect": "Ubisoft Connect", "upc": "Ubisoft Connect",
+	"galaxyclient":       "GOG Galaxy",
+	"riotclientservices": "Riot Client",
+	"amazon games":       "Amazon Games",
+	"rockstarservice":    "Rockstar Launcher", "launcher": "Rockstar Launcher",
+	"itch": "itch.io",
+}
+
+func friendlyLauncher(norm string) string {
+	if n, ok := launcherNames[norm]; ok {
+		return n
 	}
+	return norm
 }
 
 func defaultConfig() Config {
 	return Config{
-		Help:                 configHelp,
-		ConfigVersion:        currentConfigVersion,
-		DetectNetwork:        true,
-		NetworkMinSpeedKBps:  150,
-		NetworkWindowSeconds: 60,
-		IgnoreApps:           defaultIgnoreApps(),
-		DetectPartialFiles:   true,
-		WatchFolders:         []string{"%DOWNLOADS%"},
-		PartialExtensions: []string{
-			".crdownload",  // Chrome, Edge, Brave, Vivaldi
-			".part",        // Firefox, many others
-			".partial",     // older Edge / Internet Explorer
-			".download",    // Safari-style
-			".opdownload",  // Opera
-			".!qB",         // qBittorrent (when "append .!qB" is on)
-			".!ut",         // uTorrent
-			".!bt",         // BitTorrent
-			".bc!",         // BitComet
-			".aria2",       // aria2 / Motrix control files
-			".fdmdownload", // Free Download Manager
-			".downloading",
-		},
-		DetectApps:       true,
-		DownloadManagers: defaultDownloadManagers(),
-		MinSpeedKBps:     64,
-		GraceSeconds:     90,
-		CheckSeconds:     3,
-		KeepScreenOn:     false,
-		Notifications:    true,
+		Help:                configHelp,
+		ConfigVersion:       currentConfigVersion,
+		DetectEdge:          true,
+		EdgeFolders:         []string{"%DOWNLOADS%"},
+		DetectFDM:           true,
+		FDMProcesses:        []string{"fdm"},
+		DetectGameLaunchers: true,
+		GameLaunchers:       defaultGameLaunchers(),
+		MinSpeedKBps:        64,
+		GraceSeconds:        90,
+		CheckSeconds:        3,
+		KeepScreenOn:        false,
+		Notifications:       true,
 
 		CheckForUpdates:    true,
 		AutoInstallUpdates: false, // updates download quietly; you click "Update now"
@@ -126,15 +120,6 @@ func defaultConfig() Config {
 func (c *Config) sanitise() {
 	d := defaultConfig()
 	c.Help = configHelp
-	if c.NetworkMinSpeedKBps <= 0 {
-		c.NetworkMinSpeedKBps = d.NetworkMinSpeedKBps
-	}
-	if c.NetworkWindowSeconds < 3 {
-		c.NetworkWindowSeconds = 3
-	}
-	if c.NetworkWindowSeconds > 120 {
-		c.NetworkWindowSeconds = 120
-	}
 	if c.MinSpeedKBps <= 0 {
 		c.MinSpeedKBps = d.MinSpeedKBps
 	}
@@ -150,31 +135,15 @@ func (c *Config) sanitise() {
 }
 
 // migrate upgrades a config saved by an older version. Returns true if it changed.
+// Settings from before 1.5 that no longer exist (network detection, other
+// download managers...) are simply dropped; the new ones start at their defaults.
 func (c *Config) migrate() bool {
 	if c.ConfigVersion >= currentConfigVersion {
 		return false
 	}
-	if c.ConfigVersion < 5 && c.NetworkWindowSeconds == 15 {
-		// 1.4.1: downloads must hold up for most of a minute, so browsing bursts don't count.
-		c.NetworkWindowSeconds = 60
-	}
 	if c.ConfigVersion < 4 {
 		// From 1.4 updates wait for you to click "Update now" instead of installing by themselves.
 		c.AutoInstallUpdates = false
-	}
-	if c.ConfigVersion >= 2 {
-		c.ConfigVersion = currentConfigVersion
-		return true
-	}
-	// v1 only had download managers: keep the user's list and add any new defaults.
-	have := map[string]bool{}
-	for _, n := range c.DownloadManagers {
-		have[strings.ToLower(n)] = true
-	}
-	for _, n := range defaultDownloadManagers() {
-		if !have[strings.ToLower(n)] {
-			c.DownloadManagers = append(c.DownloadManagers, n)
-		}
 	}
 	c.ConfigVersion = currentConfigVersion
 	return true

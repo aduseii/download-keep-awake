@@ -10,10 +10,9 @@ import (
 	"unsafe"
 )
 
-// ioMonitor measures how much data the watched download-manager processes are
-// moving (network reads + disk writes, as counted by Windows per process).
-// Measuring only those processes means that streaming video, games or Windows
-// Update never count as "a download is happening" - only your download manager.
+// ioMonitor measures how much data the watched processes are moving
+// (network + disk, as counted by Windows per process). Watching only specific
+// apps means browsing, streaming or anything else never counts as a download.
 type ioMonitor struct {
 	prev     map[uint32]uint64
 	prevTime time.Time
@@ -28,35 +27,49 @@ func normaliseName(s string) string {
 	return strings.TrimSuffix(s, ".exe")
 }
 
-// poll returns the names of watched apps that are running and their combined
-// I/O rate in bytes per second since the previous poll.
-func (m *ioMonitor) poll(watch []string) (running []string, bytesPerSec float64) {
+// appActivity is one poll's result: which watched apps are running (by
+// normalised name) and how many bytes per second each is moving.
+type appActivity struct {
+	running map[string]bool
+	rate    map[string]float64
+}
+
+func (x appActivity) total() float64 {
+	t := 0.0
+	for _, v := range x.rate {
+		t += v
+	}
+	return t
+}
+
+// pollEach measures every watched app separately since the previous poll.
+func (m *ioMonitor) pollEach(watch []string) appActivity {
 	want := make(map[string]bool, len(watch))
 	for _, w := range watch {
 		if n := normaliseName(w); n != "" {
 			want[n] = true
 		}
 	}
+	res := appActivity{running: map[string]bool{}, rate: map[string]float64{}}
 
 	now := time.Now()
 	current := map[uint32]uint64{}
-	names := map[string]bool{}
-	var delta uint64
+	delta := map[string]uint64{}
 
 	snap, err := syscall.CreateToolhelp32Snapshot(syscall.TH32CS_SNAPPROCESS, 0)
 	if err != nil {
-		return nil, 0
+		return res
 	}
 	defer syscall.CloseHandle(snap)
 
 	var pe syscall.ProcessEntry32
 	pe.Size = uint32(unsafe.Sizeof(pe))
 	for err = syscall.Process32First(snap, &pe); err == nil; err = syscall.Process32Next(snap, &pe) {
-		exe := syscall.UTF16ToString(pe.ExeFile[:])
-		if !want[normaliseName(exe)] {
+		name := normaliseName(syscall.UTF16ToString(pe.ExeFile[:]))
+		if !want[name] {
 			continue
 		}
-		names[strings.TrimSuffix(exe, ".exe")] = true
+		res.running[name] = true
 
 		total, ok := processIOBytes(pe.ProcessID)
 		if !ok {
@@ -64,22 +77,32 @@ func (m *ioMonitor) poll(watch []string) (running []string, bytesPerSec float64)
 		}
 		current[pe.ProcessID] = total
 		if before, seen := m.prev[pe.ProcessID]; seen && total >= before {
-			delta += total - before
+			delta[name] += total - before
 		}
 	}
 
 	elapsed := now.Sub(m.prevTime).Seconds()
 	if !m.prevTime.IsZero() && elapsed > 0 {
-		bytesPerSec = float64(delta) / elapsed
+		for n, d := range delta {
+			res.rate[n] = float64(d) / elapsed
+		}
 	}
 	m.prev = current
 	m.prevTime = now
+	return res
+}
 
-	for n := range names {
-		running = append(running, n)
+// poll returns the watched apps that are running (as named in watch) and
+// their combined I/O rate in bytes per second.
+func (m *ioMonitor) poll(watch []string) (running []string, bytesPerSec float64) {
+	act := m.pollEach(watch)
+	for _, w := range watch {
+		if act.running[normaliseName(w)] {
+			running = append(running, strings.TrimSuffix(strings.TrimSpace(w), ".exe"))
+		}
 	}
 	sort.Strings(running)
-	return running, bytesPerSec
+	return running, act.total()
 }
 
 func processIOBytes(pid uint32) (uint64, bool) {
