@@ -4,8 +4,8 @@
 //go:generate rsrc -manifest assets/app.manifest -ico assets/icon.ico -arch arm64 -o rsrc_windows_arm64.syso
 
 // Download Keep-Awake: a tiny Windows tray app that stops the PC from sleeping
-// or hibernating while Microsoft Edge, Free Download Manager or a game
-// launcher is downloading.
+// or hibernating while Microsoft Edge, Google Chrome, a download manager or a
+// game launcher is downloading. Nothing else keeps the PC awake.
 package main
 
 import (
@@ -35,6 +35,7 @@ const (
 const (
 	menuStatus = iota + 1
 	menuDetectEdge
+	menuDetectChrome
 	menuDetectFDM
 	menuDetectLaunchers
 	menuKeepAwakeNow
@@ -64,7 +65,8 @@ type app struct {
 	cfg             Config
 	cfgPath         string
 	cfgMod          time.Time
-	edge            *ioMonitor // only used to see whether Edge is running
+	browsers        *ioMonitor // only used to see whether Edge / Chrome are running
+	browserFolders  string     // folders scanned last time, to notice when the set changes
 	fdm             *ioMonitor
 	launchers       *ioMonitor
 	fdmSustain      sustainTracker
@@ -149,7 +151,7 @@ func main() {
 	cfg, firstRun, cfgErr := loadConfig(a.cfgPath)
 	a.cfg = cfg
 	a.cfgMod = modTime(a.cfgPath)
-	a.edge = newIOMonitor()
+	a.browsers = newIOMonitor()
 	a.fdm = newIOMonitor()
 	a.launchers = newIOMonitor()
 	a.files = newPartialMonitor()
@@ -174,7 +176,7 @@ func main() {
 
 	if firstRun {
 		if messageBox(appName+" is installed and running in your system tray. You'll also find it in the Start menu.\n\n"+
-			"Whenever Microsoft Edge, Free Download Manager or a game launcher (Steam, Epic, Xbox, EA, Battle.net...) is downloading, "+
+			"Whenever Microsoft Edge, Google Chrome, a download manager (FDM, IDM, JDownloader...) or a game launcher (Steam, Epic, Xbox, EA, Battle.net...) is downloading, "+
 			"your PC won't go to sleep or hibernate. "+
 			"When downloads finish, your normal sleep settings come back automatically.\n\n"+
 			"Start "+appName+" automatically when Windows starts?",
@@ -291,32 +293,71 @@ func tick() {
 
 	var reasons []string
 
-	// 1. Microsoft Edge: an unfinished .crdownload file that's still growing.
-	if c.DetectEdge {
-		edge := a.edge.pollEach([]string{edgeProcess})
-		if edge.running[edgeProcess] {
-			folders := append(append([]string{}, c.EdgeFolders...), edgeDownloadFolders()...)
-			if files := a.files.poll(folders, edgePartialExtensions); len(files) > 0 {
-				label := shorten(strings.TrimSuffix(files[0], ".crdownload"), 40)
-				if len(files) > 1 {
-					label += fmt.Sprintf(" +%d more", len(files)-1)
-				}
-				reasons = append(reasons, "Edge downloading "+label)
+	// 1. Browsers (Edge, Chrome): an unfinished .crdownload file that's still growing.
+	type watchedBrowser struct {
+		b       *browser
+		on      bool
+		folders []string
+	}
+	watched := []watchedBrowser{
+		{edgeBrowser, c.DetectEdge, c.EdgeFolders},
+		{chromeBrowser, c.DetectChrome, c.ChromeFolders},
+	}
+	var procs []string
+	for _, w := range watched {
+		if w.on {
+			procs = append(procs, w.b.process)
+		}
+	}
+	var openNames, folders []string
+	if len(procs) > 0 {
+		running := a.browsers.pollEach(procs).running
+		for _, w := range watched {
+			if w.on && running[w.b.process] {
+				openNames = append(openNames, w.b.name)
+				folders = append(folders, w.folders...)
+				folders = append(folders, w.b.downloadFolders()...)
 			}
-		} else {
-			a.files.reset() // Edge closed: forget old files so a fresh start isn't mistaken for activity
+		}
+	}
+	if key := strings.ToLower(strings.Join(folders, "|")); key != a.browserFolders {
+		// A browser opened or closed, or its folder changed: start fresh so
+		// old leftover files aren't mistaken for a new download.
+		a.browserFolders = key
+		a.files.reset()
+	}
+	if len(folders) > 0 {
+		if files := a.files.poll(folders, browserPartialExtensions); len(files) > 0 {
+			label := shorten(strings.TrimSuffix(files[0], ".crdownload"), 40)
+			if len(files) > 1 {
+				label += fmt.Sprintf(" +%d more", len(files)-1)
+			}
+			reasons = append(reasons, strings.Join(openNames, "/")+" downloading "+label)
 		}
 	}
 
-	// 2 & 3. Free Download Manager and game launchers: the program's own data
+	// 2 & 3. Download managers and game launchers: the program's own data
 	// activity has to be steady (most of 15 s), so brief chatter doesn't count.
 	const appWindow = 15 * time.Second
 	minRate := c.MinSpeedKBps * 1024
-	if c.DetectFDM {
-		act := a.fdm.pollEach(c.FDMProcesses)
+	topOf := func(act appActivity) string {
+		top, topRate := "", 0.0
+		for n, r := range act.rate {
+			if r > topRate {
+				top, topRate = n, r
+			}
+		}
+		return top
+	}
+	if c.DetectDownloadManagers {
+		act := a.fdm.pollEach(c.DownloadManagers)
 		a.fdmSustain.add(now, act.total() >= minRate, appWindow)
 		if frac, full := a.fdmSustain.fraction(now, appWindow); full && frac >= 0.6 && len(act.running) > 0 {
-			reasons = append(reasons, "Free Download Manager downloading at "+formatSpeed(act.total()))
+			name := "Download manager"
+			if top := topOf(act); top != "" {
+				name = friendlyDownloadManager(top)
+			}
+			reasons = append(reasons, name+" downloading at "+formatSpeed(act.total()))
 		}
 	}
 	if c.DetectGameLaunchers {
@@ -334,12 +375,7 @@ func tick() {
 				}
 			}
 		}
-		top, topRate := "", 0.0
-		for n, r := range act.rate {
-			if r > topRate {
-				top, topRate = n, r
-			}
-		}
+		top := topOf(act)
 		a.launcherSustain.add(now, act.total() >= minRate, appWindow)
 		if frac, full := a.launcherSustain.fraction(now, appWindow); full && frac >= 0.6 && top != "" {
 			reasons = append(reasons, friendlyLauncher(top)+" downloading at "+formatSpeed(act.total()))
@@ -367,12 +403,12 @@ func tick() {
 		next = stDownloading
 		left := time.Duration(c.GraceSeconds)*time.Second - now.Sub(a.lastActive)
 		a.status = fmt.Sprintf("Keeping PC awake - download stalled or between files (%ds left)", int(left.Seconds()+0.5))
-	case !c.DetectEdge && !c.DetectFDM && !c.DetectGameLaunchers:
+	case !c.DetectEdge && !c.DetectChrome && !c.DetectDownloadManagers && !c.DetectGameLaunchers:
 		next = stIdle
 		a.status = "All detection is switched off - normal sleep allowed"
 	default:
 		next = stIdle
-		a.status = "Idle - nothing downloading in Edge, FDM or game launchers"
+		a.status = "Idle - nothing downloading in Edge, Chrome, download managers or game launchers"
 	}
 
 	setAwake(next == stDownloading || next == stManual, c.KeepScreenOn)
@@ -538,7 +574,8 @@ func showMenu() {
 	}
 	sep()
 	add(menuDetectEdge, "Microsoft Edge downloads", checked(a.cfg.DetectEdge))
-	add(menuDetectFDM, "Free Download Manager", checked(a.cfg.DetectFDM))
+	add(menuDetectChrome, "Google Chrome downloads", checked(a.cfg.DetectChrome))
+	add(menuDetectFDM, "Download managers (FDM, IDM, JDownloader...)", checked(a.cfg.DetectDownloadManagers))
 	add(menuDetectLaunchers, "Game launchers (Steam, Epic, Xbox, EA...)", checked(a.cfg.DetectGameLaunchers))
 	sep()
 	add(menuKeepAwakeNow, "Keep awake now (ignore downloads)", checked(a.manual))
@@ -562,8 +599,10 @@ func showMenu() {
 	switch int(cmd) {
 	case menuDetectEdge:
 		toggle(&a.cfg.DetectEdge)
+	case menuDetectChrome:
+		toggle(&a.cfg.DetectChrome)
 	case menuDetectFDM:
-		toggle(&a.cfg.DetectFDM)
+		toggle(&a.cfg.DetectDownloadManagers)
 	case menuDetectLaunchers:
 		toggle(&a.cfg.DetectGameLaunchers)
 	case menuKeepAwakeNow:
@@ -597,8 +636,9 @@ func showMenu() {
 	case menuSettings:
 		openWith("notepad.exe", `"`+a.cfgPath+`"`)
 	case menuAbout:
-		about := fmt.Sprintf("%s %s\n\nKeeps your PC from sleeping or hibernating while Microsoft Edge, Free Download Manager "+
-			"or a game launcher (Steam, Epic, Xbox, EA, Battle.net, Ubisoft, GOG, Riot, Amazon) is downloading.\n\n"+
+		about := fmt.Sprintf("%s %s\n\nKeeps your PC from sleeping or hibernating while Microsoft Edge, Google Chrome, "+
+			"a download manager (FDM, IDM, Neat, Xtreme, JDownloader, Motrix...) or a game launcher "+
+			"(Steam, Epic, Xbox, EA, Battle.net, Ubisoft, GOG, Riot, Amazon) is downloading. Nothing else keeps it awake.\n\n"+
 			"Icon colours:\n  Green - keeping PC awake for a download\n  Blue - kept awake manually\n  Grey - idle, normal sleep allowed\n  Amber - paused\n\n"+
 			"Settings file:\n%s\n\nOpen the project page on GitHub?", appName, version, a.cfgPath)
 		if messageBox(about, "About "+appName, MB_YESNO|MB_ICONINFORMATION) == IDYES {

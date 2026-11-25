@@ -12,19 +12,26 @@ import (
 	"unsafe"
 )
 
-const currentConfigVersion = 6
+const currentConfigVersion = 7
 
 type Config struct {
 	Help          string `json:"_help"`
 	ConfigVersion int    `json:"configVersion"`
 
-	// 1. Microsoft Edge downloads (unfinished .crdownload files)
-	DetectEdge  bool     `json:"detectEdge"`
-	EdgeFolders []string `json:"edgeFolders"`
+	// 1. Browsers: Microsoft Edge and Google Chrome (unfinished .crdownload files)
+	DetectEdge    bool     `json:"detectEdge"`
+	EdgeFolders   []string `json:"edgeFolders"`
+	DetectChrome  bool     `json:"detectChrome"`
+	ChromeFolders []string `json:"chromeFolders"`
 
-	// 2. Free Download Manager
-	DetectFDM    bool     `json:"detectFreeDownloadManager"`
-	FDMProcesses []string `json:"freeDownloadManagerProcesses"`
+	// 2. Download managers (FDM, IDM, Neat, Xtreme, JDownloader, Motrix...)
+	DetectDownloadManagers bool     `json:"detectDownloadManagers"`
+	DownloadManagers       []string `json:"downloadManagers"`
+
+	// Settings from 1.5 (Free Download Manager only), read once and moved into
+	// the download-manager settings above.
+	LegacyDetectFDM    *bool    `json:"detectFreeDownloadManager,omitempty"`
+	LegacyFDMProcesses []string `json:"freeDownloadManagerProcesses,omitempty"`
 
 	// 3. Game launchers (Steam, Epic, Xbox, EA, Battle.net, Ubisoft, GOG, Riot, Amazon...)
 	DetectGameLaunchers bool     `json:"detectGameLaunchers"`
@@ -40,11 +47,11 @@ type Config struct {
 	AutoInstallUpdates bool `json:"autoInstallUpdates"`
 }
 
-const configHelp = "The PC stays awake only while one of these is downloading: " +
-	"detectEdge: Microsoft Edge (its unfinished .crdownload files in your Downloads folder, Edge's own download folder, and any edgeFolders you add; %DOWNLOADS% = your Downloads folder). " +
-	"detectFreeDownloadManager: Free Download Manager (freeDownloadManagerProcesses). " +
-	"detectGameLaunchers: the game launchers in gameLaunchers (program names from Task Manager > Details). " +
-	"minSpeedKBps: how much steady activity from FDM or a launcher counts as downloading. " +
+const configHelp = "The PC stays awake only while one of these is downloading, nothing else counts: " +
+	"detectEdge / detectChrome: Microsoft Edge / Google Chrome (their unfinished .crdownload files in your Downloads folder, the browser's own download folder, and any edgeFolders / chromeFolders you add; %DOWNLOADS% = your Downloads folder). " +
+	"detectDownloadManagers: the download managers in downloadManagers (program names from Task Manager > Details). " +
+	"detectGameLaunchers: the game launchers and stores in gameLaunchers (program names from Task Manager > Details). " +
+	"minSpeedKBps: how much steady activity from a download manager or launcher counts as downloading. " +
 	"graceSeconds: how long to stay awake after downloading stops or stalls. keepScreenOn: also keep the display on. " +
 	"checkForUpdates: look for new versions on GitHub at start and every 6 hours and download them in the background. " +
 	"autoInstallUpdates: install them without asking (otherwise click Update now in the tray menu). " +
@@ -67,6 +74,35 @@ func defaultGameLaunchers() []string {
 		"RockstarService",    // Rockstar Games Launcher (its "Launcher" is watched while it runs)
 		"itch",               // itch.io
 	}
+}
+
+// Download managers that download files themselves.
+func defaultDownloadManagers() []string {
+	return []string{
+		"fdm",              // Free Download Manager
+		"IDMan",            // Internet Download Manager
+		"NeatDM",           // Neat Download Manager
+		"xdm-app", "xdman", // Xtreme Download Manager
+		"JDownloader2", // JDownloader 2
+		"Motrix",       // Motrix
+		"EagleGet",     // EagleGet
+		"FlashGet",     // FlashGet
+		"aria2c",       // aria2 (also what Motrix uses underneath)
+	}
+}
+
+var downloadManagerNames = map[string]string{
+	"fdm": "Free Download Manager", "idman": "IDM", "neatdm": "Neat Download Manager",
+	"xdm-app": "Xtreme Download Manager", "xdman": "Xtreme Download Manager",
+	"jdownloader2": "JDownloader", "motrix": "Motrix", "eagleget": "EagleGet",
+	"flashget": "FlashGet", "aria2c": "aria2",
+}
+
+func friendlyDownloadManager(norm string) string {
+	if n, ok := downloadManagerNames[norm]; ok {
+		return n
+	}
+	return norm
 }
 
 // Downloaders with generic program names, watched only while their launcher runs.
@@ -98,19 +134,21 @@ func friendlyLauncher(norm string) string {
 
 func defaultConfig() Config {
 	return Config{
-		Help:                configHelp,
-		ConfigVersion:       currentConfigVersion,
-		DetectEdge:          true,
-		EdgeFolders:         []string{"%DOWNLOADS%"},
-		DetectFDM:           true,
-		FDMProcesses:        []string{"fdm"},
-		DetectGameLaunchers: true,
-		GameLaunchers:       defaultGameLaunchers(),
-		MinSpeedKBps:        64,
-		GraceSeconds:        90,
-		CheckSeconds:        3,
-		KeepScreenOn:        false,
-		Notifications:       true,
+		Help:                   configHelp,
+		ConfigVersion:          currentConfigVersion,
+		DetectEdge:             true,
+		EdgeFolders:            []string{"%DOWNLOADS%"},
+		DetectChrome:           true,
+		ChromeFolders:          []string{"%DOWNLOADS%"},
+		DetectDownloadManagers: true,
+		DownloadManagers:       defaultDownloadManagers(),
+		DetectGameLaunchers:    true,
+		GameLaunchers:          defaultGameLaunchers(),
+		MinSpeedKBps:           64,
+		GraceSeconds:           90,
+		CheckSeconds:           3,
+		KeepScreenOn:           false,
+		Notifications:          true,
 
 		CheckForUpdates:    true,
 		AutoInstallUpdates: false, // updates download quietly; you click "Update now"
@@ -136,7 +174,7 @@ func (c *Config) sanitise() {
 
 // migrate upgrades a config saved by an older version. Returns true if it changed.
 // Settings from before 1.5 that no longer exist (network detection, other
-// download managers...) are simply dropped; the new ones start at their defaults.
+// browsers...) are simply dropped; the new ones start at their defaults.
 func (c *Config) migrate() bool {
 	if c.ConfigVersion >= currentConfigVersion {
 		return false
@@ -145,6 +183,25 @@ func (c *Config) migrate() bool {
 		// From 1.4 updates wait for you to click "Update now" instead of installing by themselves.
 		c.AutoInstallUpdates = false
 	}
+	if c.ConfigVersion < 7 {
+		// 1.6 adds Chrome and widens "Free Download Manager" into a list of
+		// download managers. Keep FDM switched off if it was, and keep any
+		// program names that were added by hand.
+		if c.LegacyDetectFDM != nil {
+			c.DetectDownloadManagers = *c.LegacyDetectFDM
+		}
+		have := map[string]bool{}
+		for _, n := range c.DownloadManagers {
+			have[normaliseName(n)] = true
+		}
+		for _, n := range c.LegacyFDMProcesses {
+			if k := normaliseName(n); k != "" && !have[k] {
+				have[k] = true
+				c.DownloadManagers = append(c.DownloadManagers, n)
+			}
+		}
+	}
+	c.LegacyDetectFDM, c.LegacyFDMProcesses = nil, nil
 	c.ConfigVersion = currentConfigVersion
 	return true
 }

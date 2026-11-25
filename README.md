@@ -2,7 +2,7 @@
 
 # Download Keep-Awake
 
-Download Keep-Awake is a small Windows 11 / 10 tray app that stops your PC from sleeping or hibernating **while Microsoft Edge, Free Download Manager or a game launcher is downloading**. When downloads finish, your normal sleep settings come back on their own. Nothing else (browsing, social media, streaming, other apps) keeps your PC awake.
+Download Keep-Awake is a small Windows 11 / 10 tray app that stops your PC from sleeping or hibernating **while Microsoft Edge, Google Chrome, a download manager or a game launcher is downloading**. When downloads finish, your normal sleep settings come back on their own. Nothing else (browsing, social media, streaming, other apps) keeps your PC awake.
 
 ## Install
 
@@ -27,17 +27,20 @@ Right-click it to see the current download speed and what was detected, switch e
 
 ### What counts as a download
 
-Only these three, each of which can be switched on or off in the tray menu:
+Only these four, each of which can be switched on or off in the tray menu:
 
 | Source | How it's detected |
 |---|---|
 | **Microsoft Edge** | While Edge is open, an unfinished download file (`.crdownload`) that's still growing. Edge's own download folder (Settings → Downloads → Location) is found automatically, along with your Windows Downloads folder. |
-| **Free Download Manager** | FDM's own data activity staying above 64 KB/s for most of 15 seconds. |
+| **Google Chrome** | The same, while Chrome is open, including Chrome's own download folder. |
+| **Download managers** | The download manager's own data activity staying above 64 KB/s for most of 15 seconds. Watches Free Download Manager, Internet Download Manager, Neat Download Manager, Xtreme Download Manager, JDownloader 2, Motrix, EagleGet, FlashGet and aria2. |
 | **Game launchers** | The same, for Steam, Epic Games, Xbox app, EA app, Battle.net, Ubisoft Connect, GOG Galaxy, Riot Client, Amazon Games, Rockstar Games Launcher and itch.io. Their built-in store pages (steamwebhelper and the like) don't count, so watching a trailer won't keep the PC awake. |
 
 After a download stops, the app waits 90 seconds before allowing sleep, so a short stall or a gap between files doesn't end the download. The screen can still turn off as normal.
 
-If Edge is set to **Ask me what to do with each download** and you save somewhere other than your Downloads folder or Edge's download folder, add that folder to `edgeFolders` in Settings.
+Other browsers, torrent clients, streaming, Windows Update and every other app never keep the PC awake.
+
+If Edge or Chrome is set to ask where to save each download and you save somewhere other than your Downloads folder or the browser's download folder, add that folder to `edgeFolders` or `chromeFolders` in Settings.
 
 ### Settings
 
@@ -47,11 +50,13 @@ If Edge is set to **Ask me what to do with each download** and you save somewher
 |---|---|---|
 | `detectEdge` | Watch Microsoft Edge downloads. | `true` |
 | `edgeFolders` | Extra folders to watch for Edge downloads (plus two levels of subfolders). Edge's own download folder is always included. `%DOWNLOADS%` is your Windows Downloads folder. | `["%DOWNLOADS%"]` |
-| `detectFreeDownloadManager` | Watch Free Download Manager. | `true` |
-| `freeDownloadManagerProcesses` | FDM's program name in **Task Manager → Details**. | `["fdm"]` |
+| `detectChrome` | Watch Google Chrome downloads. | `true` |
+| `chromeFolders` | Extra folders to watch for Chrome downloads, like `edgeFolders`. Chrome's own download folder is always included. | `["%DOWNLOADS%"]` |
+| `detectDownloadManagers` | Watch download managers. | `true` |
+| `downloadManagers` | Download manager program names (from **Task Manager → Details**). Add one here if yours isn't listed. | FDM, IDM, Neat, Xtreme, JDownloader, … |
 | `detectGameLaunchers` | Watch game launchers. | `true` |
 | `gameLaunchers` | Launcher program names (from **Task Manager → Details**). Add one here if yours isn't listed. | Steam, Epic, Xbox, EA, … |
-| `minSpeedKBps` | Steady activity from FDM or a launcher that counts as downloading. | `64` |
+| `minSpeedKBps` | Steady activity from a download manager or launcher that counts as downloading. | `64` |
 | `graceSeconds` | How long to stay awake after a download stops or stalls. | `90` |
 | `checkSeconds` | How often to check. | `3` |
 | `keepScreenOn` | Also keep the display on while downloading. | `false` |
@@ -77,7 +82,7 @@ If a build fails, open it in the Actions tab; the red step shows what went wrong
 You need [Go](https://go.dev/dl/) 1.22 or newer. Nothing else: the app talks to Windows directly.
 
 ```sh
-go build -trimpath -ldflags "-s -w -H windowsgui -X main.version=1.5.0" -o DownloadKeepAwake.exe .
+go build -trimpath -ldflags "-s -w -H windowsgui -X main.version=1.6.0" -o DownloadKeepAwake.exe .
 ```
 
 From Linux or macOS, put `GOOS=windows GOARCH=amd64` in front. To try a build without it installing itself, run it with `--portable`.
@@ -85,8 +90,8 @@ From Linux or macOS, put `GOOS=windows GOARCH=amd64` in front. To try a build wi
 ## Where things live
 
 - `main.go` runs the tray icon, menu and the decision to keep the PC awake.
-- `edge.go` finds Edge's download folders; `partial.go` watches for its unfinished `.crdownload` files.
-- `monitor.go` measures how much data Free Download Manager and the game launchers are moving; `sustain.go` checks that it's steady.
+- `browsers.go` finds Edge's and Chrome's download folders; `partial.go` watches for their unfinished `.crdownload` files.
+- `monitor.go` measures how much data the download managers and game launchers are moving; `sustain.go` checks that it's steady.
 - `config.go` reads and writes `config.json` and the **Start with Windows** setting.
 - `update.go` checks the Releases page, downloads, verifies and installs updates.
 - `install.go` installs per-user, adds the Start menu shortcut and the Installed apps entry, and uninstalls.
